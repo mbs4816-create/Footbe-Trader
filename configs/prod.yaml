@@ -1,0 +1,30 @@
+# Production Configuration Template
+# Copy to configs/prod.yaml and fill in secrets
+
+environment: prod
+
+database:
+  path: data/footbe_prod.db
+  echo: false
+
+football_api:
+  base_url: https://v3.football.api-sports.io
+  api_key: ${FOOTBALL_API_KEY}  # Required in production
+  timeout_seconds: 30
+  rate_limit_per_minute: 30
+
+kalshi:
+  base_url: https://trading-api.kalshi.com/trade-api/v2  # Production API
+  api_key: ${KALSHI_API_KEY}
+  api_secret: ${KALSHI_API_SECRET}
+  timeout_seconds: 30
+
+logging:
+  level: INFO
+  format: json  # Structured JSON for production
+  log_file: logs/footbe.log
+
+agent:
+  name: footbe-agent-prod
+  heartbeat_interval_seconds: 300
+  dry_run: false  # Enable real trading (use with caution!)

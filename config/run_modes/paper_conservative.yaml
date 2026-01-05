@@ -1,0 +1,59 @@
+# Paper Conservative Trading Configuration
+# Purpose: Conservative paper trading for model validation. Low risk, patient approach.
+
+mode: paper_conservative
+name: Paper Conservative
+description: Conservative paper trading for model validation. Low risk, patient approach.
+is_live: false
+paper_initial_equity: 100000.0
+
+# Objective Parameters
+target_weekly_return: 0.03  # 3% weekly target
+max_drawdown: 0.10          # 10% max drawdown (hard stop)
+soft_drawdown_threshold: 0.05  # Start throttling at 5%
+
+# Position Limits (as % of equity)
+max_exposure_per_fixture: 0.01  # 1% per fixture
+max_exposure_per_league: 0.15   # 15% per league
+max_gross_exposure: 0.50        # 50% max deployed
+
+# Edge Thresholds
+min_edge_threshold: 0.02    # 2% minimum edge (higher threshold = fewer trades)
+target_edge_threshold: 0.03 # 3% target edge
+high_confidence_edge: 0.06  # 6%+ is high confidence
+
+# Drawdown Throttle Bands
+# When drawdown reaches threshold, sizing is multiplied by this factor
+drawdown_bands:
+  - threshold: 0.03   # 0-3% drawdown
+    multiplier: 1.0   # 100% sizing
+  - threshold: 0.06   # 3-6% drawdown
+    multiplier: 0.6   # 60% sizing
+  - threshold: 0.10   # 6-10% drawdown
+    multiplier: 0.2   # 20% sizing
+
+# Pacing Parameters
+# Controls how aggressive the agent is based on progress toward target
+pacing:
+  behind_threshold: 0.7   # Behind pace if <70% of target
+  ahead_threshold: 1.5    # Ahead of pace if >150% of target
+  max_multiplier: 1.3     # Max 30% boost when behind
+  min_multiplier: 0.8     # 20% reduction when ahead
+
+# Time to Kickoff Adjustments
+# Discount edge based on time until match starts
+time_to_kickoff:
+  very_early_discount: 0.35  # >48h: 35% discount
+  early_discount: 0.20       # 24-48h: 20% discount
+  late_discount: 0.30        # <2h: 30% discount
+
+# Circuit Breakers (less relevant for paper but good practice)
+circuit_breakers:
+  max_daily_loss_pct: 0.03
+  max_consecutive_losses: 4
+  cooldown_minutes: 60
+
+# Execution Limits
+execution:
+  max_orders_per_minute: 5
+  min_time_between_trades_seconds: 10.0

@@ -1,0 +1,69 @@
+# Manual Market Overrides Configuration
+# Use this file to manually specify fixture-to-market mappings
+# when automatic mapping fails or produces incorrect results.
+
+# Format options:
+# 1. By fixture_id (API-Football fixture ID):
+#    fixture_<id>:
+#      event_ticker: "KALSHI_EVENT_TICKER"
+#      ticker_home_win: "TICKER_H"
+#      ticker_draw: "TICKER_D"  # optional
+#      ticker_away_win: "TICKER_A"
+#      structure_type: "1X2" | "NO_DRAW" | "HOME_WIN_BINARY" | "AWAY_WIN_BINARY"
+#      notes: "Optional notes about this override"
+#
+# 2. By teams + kickoff (for fixtures not yet in DB):
+#    match_<id>:
+#      home_team: "canonical team name"
+#      away_team: "canonical team name"
+#      kickoff_date: "YYYY-MM-DD"  # UTC date
+#      event_ticker: "KALSHI_EVENT_TICKER"
+#      ticker_home_win: "TICKER_H"
+#      ticker_draw: "TICKER_D"
+#      ticker_away_win: "TICKER_A"
+#      structure_type: "1X2"
+#      notes: "Optional notes"
+
+# Example overrides (uncomment and modify as needed):
+
+# --- By Fixture ID ---
+# fixture_1234567:
+#   event_ticker: "SOCCER-EPL-MUN-CHE-25JAN15"
+#   ticker_home_win: "SOCCER-EPL-MUN-CHE-25JAN15-MUN"
+#   ticker_draw: "SOCCER-EPL-MUN-CHE-25JAN15-DRAW"
+#   ticker_away_win: "SOCCER-EPL-MUN-CHE-25JAN15-CHE"
+#   structure_type: "1X2"
+#   notes: "Manual override for Man Utd vs Chelsea fixture"
+
+# --- By Team Names + Date ---
+# match_001:
+#   home_team: "manchester united"
+#   away_team: "chelsea"
+#   kickoff_date: "2026-01-15"
+#   event_ticker: "SOCCER-EPL-MUN-CHE-26JAN15"
+#   ticker_home_win: "SOCCER-EPL-MUN-CHE-26JAN15-MUN"
+#   ticker_draw: "SOCCER-EPL-MUN-CHE-26JAN15-DRAW"
+#   ticker_away_win: "SOCCER-EPL-MUN-CHE-26JAN15-CHE"
+#   structure_type: "1X2"
+
+# --- Markets without draw option ---
+# fixture_9876543:
+#   event_ticker: "SOCCER-MLS-LAFC-GAL-25JUL04"
+#   ticker_home_win: "SOCCER-MLS-LAFC-GAL-25JUL04-LAFC"
+#   ticker_away_win: "SOCCER-MLS-LAFC-GAL-25JUL04-GAL"
+#   structure_type: "NO_DRAW"
+#   notes: "MLS match - Kalshi doesn't offer draw market"
+
+# --- Binary home win market only ---
+# fixture_5555555:
+#   event_ticker: "SOCCER-WILL-MUN-WIN"
+#   ticker_home_win_yes: "SOCCER-WILL-MUN-WIN-Y"
+#   ticker_home_win_no: "SOCCER-WILL-MUN-WIN-N"
+#   structure_type: "HOME_WIN_BINARY"
+#   notes: "Binary market for Man Utd win"
+
+# ============================================================
+# Active Overrides (add your overrides below this line):
+# ============================================================
+
+overrides: {}

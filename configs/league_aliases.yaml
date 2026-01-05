@@ -1,0 +1,283 @@
+# League Name Aliases Configuration
+# Maps variant league names to canonical league keys
+# Format: "variant_name": "canonical_key"
+# The canonical_key is used for cross-platform matching
+
+# English Leagues
+english_premier_league:
+  canonical_key: "premier_league"
+  aliases:
+    - "epl"
+    - "english premier league"
+    - "premier league"
+    - "barclays premier league"
+    - "premiership"
+    - "england premier league"
+    - "england - premier league"
+    - "eng premier league"
+
+championship:
+  canonical_key: "championship"
+  aliases:
+    - "english championship"
+    - "efl championship"
+    - "england championship"
+    - "england - championship"
+    - "sky bet championship"
+    - "eng championship"
+
+# Spanish Leagues
+la_liga:
+  canonical_key: "la_liga"
+  aliases:
+    - "la liga"
+    - "laliga"
+    - "la liga santander"
+    - "spanish la liga"
+    - "spain la liga"
+    - "primera division"
+    - "spain - la liga"
+    - "esp la liga"
+    - "la liga ea sports"
+
+segunda_division:
+  canonical_key: "la_liga_2"
+  aliases:
+    - "la liga 2"
+    - "segunda division"
+    - "segunda"
+    - "laliga2"
+    - "spain segunda"
+    - "spain - segunda division"
+
+# Italian Leagues
+serie_a:
+  canonical_key: "serie_a"
+  aliases:
+    - "serie a"
+    - "italian serie a"
+    - "italy serie a"
+    - "serie a tim"
+    - "serie a bkt"
+    - "italy - serie a"
+    - "ita serie a"
+    - "calcio serie a"
+
+serie_b:
+  canonical_key: "serie_b"
+  aliases:
+    - "serie b"
+    - "italian serie b"
+    - "italy serie b"
+    - "italy - serie b"
+
+# German Leagues
+bundesliga:
+  canonical_key: "bundesliga"
+  aliases:
+    - "bundesliga"
+    - "german bundesliga"
+    - "germany bundesliga"
+    - "1. bundesliga"
+    - "1 bundesliga"
+    - "germany - bundesliga"
+    - "ger bundesliga"
+
+bundesliga_2:
+  canonical_key: "bundesliga_2"
+  aliases:
+    - "2. bundesliga"
+    - "2 bundesliga"
+    - "bundesliga 2"
+    - "german bundesliga 2"
+    - "germany - 2. bundesliga"
+
+# French Leagues
+ligue_1:
+  canonical_key: "ligue_1"
+  aliases:
+    - "ligue 1"
+    - "ligue1"
+    - "french ligue 1"
+    - "france ligue 1"
+    - "ligue 1 uber eats"
+    - "france - ligue 1"
+    - "fra ligue 1"
+
+ligue_2:
+  canonical_key: "ligue_2"
+  aliases:
+    - "ligue 2"
+    - "ligue2"
+    - "french ligue 2"
+    - "france ligue 2"
+    - "ligue 2 bkt"
+    - "france - ligue 2"
+
+# Portuguese Leagues
+primeira_liga:
+  canonical_key: "primeira_liga"
+  aliases:
+    - "primeira liga"
+    - "portuguese liga"
+    - "portugal primeira liga"
+    - "liga portugal"
+    - "liga nos"
+    - "portugal - primeira liga"
+
+# Dutch Leagues
+eredivisie:
+  canonical_key: "eredivisie"
+  aliases:
+    - "eredivisie"
+    - "dutch eredivisie"
+    - "netherlands eredivisie"
+    - "holland eredivisie"
+    - "netherlands - eredivisie"
+
+# Belgian Leagues
+jupiler_pro_league:
+  canonical_key: "jupiler_pro_league"
+  aliases:
+    - "jupiler pro league"
+    - "belgian pro league"
+    - "belgium first division a"
+    - "belgium - jupiler pro league"
+
+# Scottish Leagues
+scottish_premiership:
+  canonical_key: "scottish_premiership"
+  aliases:
+    - "scottish premiership"
+    - "scotland premiership"
+    - "spfl premiership"
+    - "scotland - premiership"
+
+# American Leagues
+mls:
+  canonical_key: "mls"
+  aliases:
+    - "mls"
+    - "major league soccer"
+    - "usa mls"
+    - "usa major league soccer"
+    - "usa - mls"
+    - "us mls"
+
+usl_championship:
+  canonical_key: "usl_championship"
+  aliases:
+    - "usl championship"
+    - "usl"
+    - "usa usl championship"
+    - "usa - usl championship"
+
+# Mexican Leagues
+liga_mx:
+  canonical_key: "liga_mx"
+  aliases:
+    - "liga mx"
+    - "mexican liga mx"
+    - "mexico liga mx"
+    - "primera division mexico"
+    - "mexico - liga mx"
+    - "mex liga mx"
+
+# Brazilian Leagues
+brasileiro_serie_a:
+  canonical_key: "brasileiro_serie_a"
+  aliases:
+    - "brasileirao"
+    - "brasileiro serie a"
+    - "brazil serie a"
+    - "campeonato brasileiro"
+    - "brazil - serie a"
+
+# Argentine Leagues
+primera_division_argentina:
+  canonical_key: "argentina_primera"
+  aliases:
+    - "argentina primera division"
+    - "liga profesional"
+    - "superliga argentina"
+    - "argentina - primera division"
+
+# European Competitions
+champions_league:
+  canonical_key: "champions_league"
+  aliases:
+    - "champions league"
+    - "uefa champions league"
+    - "ucl"
+    - "cl"
+    - "europe - champions league"
+
+europa_league:
+  canonical_key: "europa_league"
+  aliases:
+    - "europa league"
+    - "uefa europa league"
+    - "uel"
+    - "el"
+    - "europe - europa league"
+
+conference_league:
+  canonical_key: "conference_league"
+  aliases:
+    - "conference league"
+    - "uefa conference league"
+    - "uecl"
+    - "europa conference league"
+    - "europe - conference league"
+
+# International Competitions
+world_cup:
+  canonical_key: "world_cup"
+  aliases:
+    - "world cup"
+    - "fifa world cup"
+    - "wc"
+    - "world - world cup"
+
+euro:
+  canonical_key: "euro"
+  aliases:
+    - "euro"
+    - "european championship"
+    - "uefa euro"
+    - "euros"
+    - "europe - euro"
+
+copa_america:
+  canonical_key: "copa_america"
+  aliases:
+    - "copa america"
+    - "copa américa"
+    - "south america - copa america"
+
+# API-Football League ID to canonical key mapping
+api_football_league_ids:
+  39: "premier_league"       # England - Premier League
+  40: "championship"         # England - Championship
+  140: "la_liga"             # Spain - La Liga
+  141: "la_liga_2"           # Spain - Segunda Division
+  135: "serie_a"             # Italy - Serie A
+  136: "serie_b"             # Italy - Serie B
+  78: "bundesliga"           # Germany - Bundesliga
+  79: "bundesliga_2"         # Germany - 2. Bundesliga
+  61: "ligue_1"              # France - Ligue 1
+  62: "ligue_2"              # France - Ligue 2
+  94: "primeira_liga"        # Portugal - Primeira Liga
+  88: "eredivisie"           # Netherlands - Eredivisie
+  144: "jupiler_pro_league"  # Belgium - Jupiler Pro League
+  179: "scottish_premiership" # Scotland - Premiership
+  253: "mls"                 # USA - Major League Soccer
+  262: "liga_mx"             # Mexico - Liga MX
+  71: "brasileiro_serie_a"   # Brazil - Serie A
+  128: "argentina_primera"   # Argentina - Primera Division
+  2: "champions_league"      # UEFA Champions League
+  3: "europa_league"         # UEFA Europa League
+  848: "conference_league"   # UEFA Conference League
+  1: "world_cup"             # FIFA World Cup
+  4: "euro"                  # UEFA Euro Championship
+  9: "copa_america"          # Copa America

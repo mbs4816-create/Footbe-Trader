@@ -1,0 +1,59 @@
+# Paper Aggressive Trading Configuration
+# Purpose: Aggressive paper trading targeting 10% weekly growth. Tests edge utilization.
+
+mode: paper_aggressive
+name: Paper Aggressive
+description: Aggressive paper trading targeting 10% weekly growth. Tests edge utilization.
+is_live: false
+paper_initial_equity: 100000.0
+
+# Objective Parameters
+target_weekly_return: 0.10  # 10% weekly target (aggressive!)
+max_drawdown: 0.15          # 15% max drawdown (hard stop)
+soft_drawdown_threshold: 0.07  # Start throttling at 7%
+
+# Position Limits (as % of equity)
+max_exposure_per_fixture: 0.02  # 2% per fixture
+max_exposure_per_league: 0.25   # 25% per league
+max_gross_exposure: 0.80        # 80% max deployed
+
+# Edge Thresholds
+min_edge_threshold: 0.005   # 0.5% minimum edge (lower = more trades)
+target_edge_threshold: 0.02 # 2% target edge
+high_confidence_edge: 0.05  # 5%+ is high confidence
+
+# Drawdown Throttle Bands
+# When drawdown reaches threshold, sizing is multiplied by this factor
+drawdown_bands:
+  - threshold: 0.05   # 0-5% drawdown
+    multiplier: 1.0   # 100% sizing
+  - threshold: 0.10   # 5-10% drawdown
+    multiplier: 0.7   # 70% sizing
+  - threshold: 0.15   # 10-15% drawdown
+    multiplier: 0.4   # 40% sizing
+
+# Pacing Parameters
+# Controls how aggressive the agent is based on progress toward target
+pacing:
+  behind_threshold: 0.7   # Behind pace if <70% of target
+  ahead_threshold: 1.5    # Ahead of pace if >150% of target
+  max_multiplier: 1.8     # Max 80% boost when behind (more aggressive)
+  min_multiplier: 0.7     # 30% reduction when ahead
+
+# Time to Kickoff Adjustments
+# Discount edge based on time until match starts
+time_to_kickoff:
+  very_early_discount: 0.30  # >48h: 30% discount
+  early_discount: 0.15       # 24-48h: 15% discount
+  late_discount: 0.25        # <2h: 25% discount
+
+# Circuit Breakers
+circuit_breakers:
+  max_daily_loss_pct: 0.05
+  max_consecutive_losses: 5
+  cooldown_minutes: 30
+
+# Execution Limits
+execution:
+  max_orders_per_minute: 10
+  min_time_between_trades_seconds: 5.0

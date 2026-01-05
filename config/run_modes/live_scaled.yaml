@@ -1,0 +1,58 @@
+# Live Scaled Trading Configuration
+# Purpose: Full scale live trading after successful validation period.
+
+mode: live_scaled
+name: Live Scaled
+description: Full scale live trading after successful validation period.
+is_live: true
+
+# Objective Parameters
+target_weekly_return: 0.08  # 8% weekly target (slightly less than paper aggressive)
+max_drawdown: 0.15          # 15% max drawdown
+soft_drawdown_threshold: 0.07  # Start throttling at 7%
+
+# Position Limits (as % of equity)
+max_exposure_per_fixture: 0.015  # 1.5% per fixture
+max_exposure_per_league: 0.20    # 20% per league
+max_gross_exposure: 0.70         # 70% max deployed (slightly less than paper)
+
+# Edge Thresholds
+min_edge_threshold: 0.01    # 1% minimum edge
+target_edge_threshold: 0.02 # 2% target edge
+high_confidence_edge: 0.05  # 5%+ is high confidence
+
+# Drawdown Throttle Bands
+# When drawdown reaches threshold, sizing is multiplied by this factor
+drawdown_bands:
+  - threshold: 0.05   # 0-5% drawdown
+    multiplier: 1.0   # 100% sizing
+  - threshold: 0.10   # 5-10% drawdown
+    multiplier: 0.6   # 60% sizing
+  - threshold: 0.15   # 10-15% drawdown
+    multiplier: 0.25  # 25% sizing
+
+# Pacing Parameters
+# Controls how aggressive the agent is based on progress toward target
+pacing:
+  behind_threshold: 0.75  # Behind pace if <75% of target
+  ahead_threshold: 1.4    # Ahead of pace if >140% of target
+  max_multiplier: 1.5     # Max 50% boost when behind
+  min_multiplier: 0.7     # 30% reduction when ahead
+
+# Time to Kickoff Adjustments
+# Discount edge based on time until match starts
+time_to_kickoff:
+  very_early_discount: 0.30  # >48h: 30% discount
+  early_discount: 0.15       # 24-48h: 15% discount
+  late_discount: 0.25        # <2h: 25% discount
+
+# Circuit Breakers
+circuit_breakers:
+  max_daily_loss_pct: 0.04    # 4% max daily loss
+  max_consecutive_losses: 5   # Stop after 5 consecutive losses
+  cooldown_minutes: 45        # 45 minute cooldown
+
+# Execution Limits
+execution:
+  max_orders_per_minute: 8
+  min_time_between_trades_seconds: 8.0

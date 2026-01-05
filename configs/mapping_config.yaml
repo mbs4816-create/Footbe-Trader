@@ -1,0 +1,130 @@
+# Mapping Configuration
+# Global settings for fixture-to-market mapping
+
+# Time window for candidate matching
+time_window:
+  # Hours before fixture kickoff to look for markets
+  hours_before: 24
+  # Hours after fixture kickoff to look for markets
+  hours_after: 24
+  # Prefer markets that close within this window of kickoff (hours)
+  preferred_close_window: 6
+
+# Minimum confidence thresholds
+confidence:
+  # Minimum score to auto-accept a mapping (0.0 - 1.0)
+  auto_accept_threshold: 0.85
+  # Minimum score to consider a candidate (below this = rejected)
+  min_candidate_threshold: 0.30
+  # Score below which mapping goes to review queue
+  review_threshold: 0.70
+
+# Scoring weights for candidate matching (should sum to 1.0)
+scoring_weights:
+  # Both teams matched with correct home/away ordering
+  team_match: 0.40
+  # Time proximity between fixture and market close
+  date_match: 0.20
+  # League/competition match
+  league_match: 0.15
+  # Market type preference (1X2 vs moneyline vs binary)
+  market_type: 0.10
+  # Fuzzy text similarity on full title
+  text_similarity: 0.15
+
+# Team matching settings
+team_matching:
+  # Minimum fuzzy match ratio to consider a team match (0-100)
+  min_fuzzy_ratio: 80
+  # Bonus for exact canonical match
+  exact_match_bonus: 0.1
+  # Penalty for home/away swap
+  order_swap_penalty: 0.15
+
+# Market type preferences (higher = more preferred)
+market_type_preferences:
+  "1X2": 1.0
+  "NO_DRAW": 0.9
+  "MONEYLINE": 0.8
+  "HOME_WIN_BINARY": 0.6
+  "AWAY_WIN_BINARY": 0.6
+  "UNKNOWN": 0.3
+
+# Soccer market detection patterns
+soccer_detection:
+  # Keywords that indicate a soccer/football market
+  keywords:
+    - "soccer"
+    - "football"
+    - "premier league"
+    - "la liga"
+    - "serie a"
+    - "bundesliga"
+    - "ligue 1"
+    - "champions league"
+    - "europa league"
+    - "mls"
+    - "liga mx"
+    - "world cup"
+    - "euro"
+  
+  # Categories that indicate soccer
+  categories:
+    - "sports"
+    - "soccer"
+    - "football"
+  
+  # Series ticker patterns (regex) - Kalshi uses KX prefix
+  series_patterns:
+    # EPL and English Football
+    - "^KXEPL"           # EPL games, goals, spreads, totals
+    - "^KXPREMIERLEAGUE" # EPL winner
+    - "^KXEFLCHAMPIONSHIP" # EFL Championship
+    - "^KXEFLCUP"        # EFL Cup (Carabao Cup)
+    - "^KXFACUP"         # FA Cup
+    # European Leagues
+    - "^KXLALIGA"        # La Liga (Spain)
+    - "^KXBUNDESLIGA"    # Bundesliga (Germany)
+    - "^KXSERIEA"        # Serie A (Italy)
+    - "^KXLIGUE1"        # Ligue 1 (France)
+    - "^KXLIGAPORTUGAL"  # Liga Portugal
+    - "^KXBELGIANPL"     # Belgian Pro League
+    - "^KXDANISHSUPERLIGA" # Danish Superliga
+    - "^KXJLEAGUE"       # J-League (Japan)
+    - "^KXBRASILEIRO"    # Brasileirão (Brazil)
+    # European Competitions
+    - "^KXUCL"           # UEFA Champions League
+    - "^KXUEL"           # UEFA Europa League  
+    - "^KXUEFA"          # Other UEFA competitions
+    # Americas
+    - "^KXMLS"           # MLS
+    - "^KXLIGAMX"        # Liga MX (Mexico)
+    - "^KXUSOPENCUP"     # US Open Cup
+    - "^KXCOPADELREY"    # Copa Del Rey
+    # World
+    - "^KXMENWORLDCUP"   # Men's World Cup
+    - "^KXMWORLDCUP"     # World Cup
+    # Generic soccer patterns
+    - "^KXSOCCER"        # Generic soccer markets
+
+# Title parsing patterns for extracting team names
+title_parsing:
+  # Patterns to extract "Team A vs Team B" format
+  vs_patterns:
+    - "(?P<home>.+?)\\s+(?:vs?\\.?|versus|@)\\s+(?P<away>.+)"
+    - "(?P<home>.+?)\\s+-\\s+(?P<away>.+)"
+  
+  # Patterns for "Will Team X win?" format
+  team_win_patterns:
+    - "will\\s+(?P<team>.+?)\\s+win"
+    - "(?P<team>.+?)\\s+to\\s+win"
+    - "(?P<team>.+?)\\s+(?:wins?|victory)"
+
+# Logging settings
+logging:
+  # Log all mapping attempts
+  log_all_attempts: true
+  # Log score breakdowns for debugging
+  log_score_breakdown: true
+  # Maximum candidates to log per fixture
+  max_logged_candidates: 5

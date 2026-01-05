@@ -1,0 +1,31 @@
+# Development Configuration
+# Copy to configs/dev.yaml and customize
+
+environment: dev
+
+database:
+  path: data/footbe_dev.db
+  echo: false
+
+football_api:
+  base_url: https://v3.football.api-sports.io
+  api_key: ${FOOTBALL_API_KEY:-}  # Set via environment variable
+  timeout_seconds: 30
+  rate_limit_per_minute: 30
+
+kalshi:
+  base_url: https://api.elections.kalshi.com/trade-api/v2  # Production with soccer markets
+  use_demo: false
+  api_key_id: ${KALSHI_API_KEY_ID:-}
+  private_key_path: ${KALSHI_PRIVATE_KEY_PATH:-}
+  timeout_seconds: 30
+
+logging:
+  level: DEBUG
+  format: console  # Use 'json' for production
+  log_file: null
+
+agent:
+  name: footbe-agent-dev
+  heartbeat_interval_seconds: 60
+  dry_run: false  # Live trading enabled

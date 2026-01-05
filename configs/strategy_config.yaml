@@ -1,0 +1,76 @@
+# Strategy Configuration
+# Settings for trading strategy v1: edge-based with Kelly sizing
+
+# Edge thresholds
+edge:
+  # Minimum edge to consider entering a position (edge = model_prob - ask_price)
+  min_edge_to_enter: 0.05  # 5% edge
+  # Edge buffer for exit - exit when edge goes below this (negative = can tolerate small negative edge)
+  exit_edge_buffer: -0.01  # Exit when edge < -1%
+  # Minimum confidence from model to trade
+  min_model_confidence: 0.6
+
+# Liquidity requirements
+liquidity:
+  # Minimum ask volume to place a buy order
+  min_ask_volume: 10
+  # Minimum bid volume to place a sell order
+  min_bid_volume: 10
+  # Maximum spread to consider trading (ask - bid)
+  max_spread: 0.50  # 50 cents - soccer markets have wider spreads
+
+# Position sizing (fractional Kelly)
+kelly:
+  # Fraction of Kelly criterion to use (1.0 = full Kelly, 0.25 = quarter Kelly)
+  fraction: 0.25
+  # Maximum Kelly bet as fraction of bankroll
+  max_kelly_fraction: 0.10
+
+# Position limits
+limits:
+  # Maximum position per market (in contracts/shares)
+  max_position_per_market: 10
+  # Maximum dollar exposure per fixture (across all outcome markets)
+  max_exposure_per_fixture: 20.0
+  # Global maximum exposure across all positions
+  max_global_exposure: 50.0
+  # Initial bankroll for Kelly calculations
+  initial_bankroll: 100.0
+
+# Exit rules
+exit_rules:
+  # Take profit: exit when mid_price >= entry_price + take_profit
+  take_profit: 0.15  # 15 cents profit
+  # Stop loss: exit when mid_price <= entry_price - stop_loss
+  stop_loss: 0.20  # 20 cents loss
+  # Time-based exit: close position this many hours before market close
+  close_before_expiry_hours: 1.0
+
+# Market filtering
+market_filter:
+  # Only trade markets with status 'open' or 'active'
+  allowed_statuses:
+    - "open"
+    - "active"
+  # Minimum time until market close (hours)
+  min_hours_to_close: 2.0
+  # Maximum time until market close (hours)
+  max_hours_to_close: 720.0  # 30 days
+
+# Paper trading specific settings
+paper_trading:
+  # Slippage simulation: add this to ask when buying, subtract from bid when selling
+  slippage_cents: 0.01
+  # Fill probability: probability that a limit order gets filled at snapshot time
+  fill_probability: 0.8
+  # Partial fill range: [min, max] fraction of order that gets filled
+  partial_fill_range: [0.5, 1.0]
+
+# Logging
+logging:
+  # Log every decision (even no-trade decisions)
+  log_all_decisions: true
+  # Include full orderbook snapshot in decision log
+  include_orderbook_snapshot: true
+  # Include feature values in decision log
+  include_features: true
