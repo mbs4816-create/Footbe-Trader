@@ -379,3 +379,70 @@ class BacktestEquity:
     drawdown: float = 0.0
 
     created_at: datetime = field(default_factory=utc_now)
+
+
+# ============================================================================
+# NBA Models
+# ============================================================================
+
+
+@dataclass
+class NBATeamRecord:
+    """NBA team database record."""
+
+    id: int | None = None
+    team_id: int = 0  # API-NBA team ID
+    name: str = ""
+    nickname: str = ""
+    code: str = ""  # 3-letter code like "LAL", "BOS"
+    city: str = ""
+    conference: str = ""  # "East" or "West"
+    division: str = ""
+    logo_url: str = ""
+    raw_json: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class NBAGameRecord:
+    """NBA game database record."""
+
+    id: int | None = None
+    game_id: int = 0  # API-NBA game ID
+    season: int = 0
+    league: str = "standard"
+    stage: int | None = None
+    date_utc: datetime = field(default_factory=utc_now)
+    timestamp: int = 0  # Unix timestamp
+    status: int = 1  # NBAGameStatus enum value
+    home_team_id: int = 0
+    away_team_id: int = 0
+    home_score: int | None = None
+    away_score: int | None = None
+    arena: str = ""
+    city: str = ""
+    raw_json: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class NBAGameMarketMap:
+    """Mapping between NBA game and Kalshi markets."""
+
+    id: int | None = None
+    game_id: int = 0  # API-NBA game ID
+    mapping_version: int = 1
+    
+    # 2-way market structure (no draw in basketball)
+    ticker_home_win: str | None = None
+    ticker_away_win: str | None = None
+    
+    event_ticker: str | None = None  # Kalshi event ticker
+    confidence_score: float = 0.0
+    confidence_components: dict[str, Any] = field(default_factory=dict)
+    status: str = "AUTO"  # 'AUTO', 'MANUAL_OVERRIDE', 'REJECTED'
+    metadata_json: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)

@@ -1,6 +1,6 @@
 """SQLite database schema definitions."""
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA_SQL = """
 -- Schema version tracking
@@ -770,6 +770,97 @@ CREATE INDEX IF NOT EXISTS idx_decision_records_edge_bucket ON decision_records(
 CREATE INDEX IF NOT EXISTS idx_decision_records_created ON decision_records(created_at);
 """
 
+# Migration 8: NBA support - basketball games, teams, and market linking
+MIGRATION_8_NBA_SUPPORT = """
+-- NBA Teams table
+CREATE TABLE IF NOT EXISTS nba_teams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id INTEGER UNIQUE NOT NULL,  -- API-NBA team ID
+    name TEXT NOT NULL,
+    nickname TEXT,
+    code TEXT,  -- 3-letter code like "LAL", "BOS"
+    city TEXT,
+    conference TEXT,  -- "East" or "West"
+    division TEXT,
+    logo_url TEXT,
+    raw_json TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_nba_teams_team_id ON nba_teams(team_id);
+CREATE INDEX IF NOT EXISTS idx_nba_teams_code ON nba_teams(code);
+CREATE INDEX IF NOT EXISTS idx_nba_teams_name ON nba_teams(name);
+
+-- NBA Games table
+CREATE TABLE IF NOT EXISTS nba_games (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER UNIQUE NOT NULL,  -- API-NBA game ID
+    season INTEGER NOT NULL,
+    league TEXT NOT NULL DEFAULT 'standard',
+    stage INTEGER,
+    date_utc TEXT NOT NULL,
+    timestamp INTEGER,  -- Unix timestamp
+    status INTEGER NOT NULL DEFAULT 1,  -- NBAGameStatus enum
+    home_team_id INTEGER NOT NULL,
+    away_team_id INTEGER NOT NULL,
+    home_score INTEGER,
+    away_score INTEGER,
+    arena TEXT,
+    city TEXT,
+    raw_json TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (home_team_id) REFERENCES nba_teams(team_id),
+    FOREIGN KEY (away_team_id) REFERENCES nba_teams(team_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_nba_games_game_id ON nba_games(game_id);
+CREATE INDEX IF NOT EXISTS idx_nba_games_season ON nba_games(season);
+CREATE INDEX IF NOT EXISTS idx_nba_games_date ON nba_games(date_utc);
+CREATE INDEX IF NOT EXISTS idx_nba_games_status ON nba_games(status);
+CREATE INDEX IF NOT EXISTS idx_nba_games_home_team ON nba_games(home_team_id);
+CREATE INDEX IF NOT EXISTS idx_nba_games_away_team ON nba_games(away_team_id);
+
+-- Add basketball flags to kalshi_events and kalshi_markets
+ALTER TABLE kalshi_events ADD COLUMN is_basketball INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE kalshi_events ADD COLUMN sport_type TEXT DEFAULT 'unknown';
+
+ALTER TABLE kalshi_markets ADD COLUMN is_basketball INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE kalshi_markets ADD COLUMN sport_type TEXT DEFAULT 'unknown';
+
+-- NBA Game to Kalshi market mapping (2-way only, no draw)
+CREATE TABLE IF NOT EXISTS nba_game_market_map (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER NOT NULL,  -- API-NBA game ID
+    mapping_version INTEGER NOT NULL DEFAULT 1,
+    
+    -- 2-way market structure (no draw in basketball)
+    ticker_home_win TEXT,
+    ticker_away_win TEXT,
+    
+    event_ticker TEXT,  -- Kalshi event ticker (e.g., KXNBAGAME-26JAN07MILGSW)
+    confidence_score REAL NOT NULL DEFAULT 0.0,
+    confidence_components TEXT DEFAULT '{}',  -- JSON with score breakdown
+    status TEXT NOT NULL DEFAULT 'AUTO',  -- 'AUTO', 'MANUAL_OVERRIDE', 'REJECTED'
+    metadata_json TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(game_id, mapping_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_nba_game_market_map_game_id ON nba_game_market_map(game_id);
+CREATE INDEX IF NOT EXISTS idx_nba_game_market_map_status ON nba_game_market_map(status);
+CREATE INDEX IF NOT EXISTS idx_nba_game_market_map_confidence ON nba_game_market_map(confidence_score);
+CREATE INDEX IF NOT EXISTS idx_nba_game_market_map_event_ticker ON nba_game_market_map(event_ticker);
+
+-- Index for sport type filtering
+CREATE INDEX IF NOT EXISTS idx_kalshi_events_is_basketball ON kalshi_events(is_basketball);
+CREATE INDEX IF NOT EXISTS idx_kalshi_events_sport_type ON kalshi_events(sport_type);
+CREATE INDEX IF NOT EXISTS idx_kalshi_markets_is_basketball ON kalshi_markets(is_basketball);
+CREATE INDEX IF NOT EXISTS idx_kalshi_markets_sport_type ON kalshi_markets(sport_type);
+"""
+
 MIGRATIONS: dict[int, str] = {
     1: SCHEMA_SQL,
     2: MIGRATION_2_ORDERBOOK_SNAPSHOTS,
@@ -778,4 +869,6 @@ MIGRATIONS: dict[int, str] = {
     5: MIGRATION_5_PAPER_TRADING,
     6: MIGRATION_6_HISTORICAL_SNAPSHOTS,
     7: MIGRATION_7_REPORTING,
+    8: MIGRATION_8_NBA_SUPPORT,
 }
+

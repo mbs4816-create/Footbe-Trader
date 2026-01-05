@@ -277,6 +277,57 @@ class KalshiClient(IKalshiTradingClient):
                 return None
             raise
 
+    async def get_events_for_series(
+        self, series_ticker: str, status: str | None = "open"
+    ) -> list[EventData]:
+        """Get all events for a series.
+        
+        Handles pagination to get all events.
+        
+        Args:
+            series_ticker: Series ticker (e.g., "KXNBAGAME", "KXEPLGAME").
+            status: Filter by status (e.g., "open", "closed").
+            
+        Returns:
+            List of all events in the series.
+        """
+        all_events: list[EventData] = []
+        cursor: str | None = None
+        
+        while True:
+            events, next_cursor = await self.list_events(
+                series_ticker=series_ticker,
+                status=status,
+                limit=100,
+                cursor=cursor,
+            )
+            all_events.extend(events)
+            
+            if not next_cursor or not events:
+                break
+            cursor = next_cursor
+        
+        return all_events
+
+    async def get_markets_for_event(
+        self, event_ticker: str, status: str | None = None
+    ) -> list[MarketData]:
+        """Get all markets for an event.
+        
+        Args:
+            event_ticker: Event ticker.
+            status: Optional status filter.
+            
+        Returns:
+            List of markets for the event.
+        """
+        markets, _ = await self.list_markets(
+            event_ticker=event_ticker,
+            status=status,
+            limit=100,
+        )
+        return markets
+
     def _parse_market(self, data: dict[str, Any]) -> MarketData:
         """Parse market data from API response."""
         return MarketData(

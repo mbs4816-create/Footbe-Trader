@@ -295,13 +295,13 @@ class TradingAgent:
         logger.info("agent_loop_stopped")
 
     async def _get_mapped_fixtures(self) -> list[FixtureContext]:
-        """Get fixtures with valid market mappings."""
+        """Get fixtures with valid market mappings (soccer and NBA)."""
         fixtures: list[FixtureContext] = []
 
-        # Query fixtures with mappings from database
+        # Query soccer fixtures with mappings from database
         cursor = self.db.connection.cursor()
 
-        # Get fixtures in the next 7 days with active mappings
+        # Get soccer fixtures in the next 7 days with active mappings
         now = utc_now()
         cutoff = now + timedelta(days=7)
 
@@ -321,7 +321,8 @@ class TradingAgent:
                 m.event_ticker,
                 m.confidence_score,
                 th.name as home_team_name,
-                ta.name as away_team_name
+                ta.name as away_team_name,
+                'soccer' as sport_type
             FROM fixtures_v2 f
             JOIN fixture_market_map m ON f.fixture_id = m.fixture_id
             LEFT JOIN teams th ON f.home_team_id = th.team_id
@@ -364,6 +365,85 @@ class TradingAgent:
             )
             fixtures.append(fixture_ctx)
 
+        # Get NBA games with mappings
+        nba_fixtures = await self._get_mapped_nba_games()
+        fixtures.extend(nba_fixtures)
+
+        return fixtures
+
+    async def _get_mapped_nba_games(self) -> list[FixtureContext]:
+        """Get NBA games with valid market mappings."""
+        fixtures: list[FixtureContext] = []
+        cursor = self.db.connection.cursor()
+        
+        now = utc_now()
+        cutoff = now + timedelta(days=7)
+        
+        cursor.execute(
+            """
+            SELECT
+                g.game_id,
+                g.home_team_id,
+                g.away_team_id,
+                g.date_utc,
+                'NBA' as league,
+                m.mapping_version,
+                'MONEYLINE' as structure_type,
+                m.ticker_home_win,
+                NULL as ticker_draw,
+                m.ticker_away_win,
+                m.event_ticker,
+                m.confidence_score,
+                h.nickname as home_team_name,
+                a.nickname as away_team_name,
+                'basketball' as sport_type
+            FROM nba_games g
+            JOIN nba_game_market_map m ON g.game_id = m.game_id
+            LEFT JOIN nba_teams h ON g.home_team_id = h.team_id
+            LEFT JOIN nba_teams a ON g.away_team_id = a.team_id
+            WHERE g.date_utc >= ?
+            AND g.date_utc <= ?
+            AND g.status = 1  -- NOT_STARTED
+            AND m.status = 'AUTO'
+            AND m.confidence_score >= 0.50
+            ORDER BY g.date_utc ASC
+            """,
+            (now.isoformat(), cutoff.isoformat()),
+        )
+        
+        for row in cursor.fetchall():
+            # Use game_id but prefix with NBA to avoid ID collisions with soccer
+            game_id = row["game_id"]
+            fixture_id = 1000000000 + game_id  # NBA games have IDs > 1 billion
+            
+            mapping = FixtureMarketMapping(
+                fixture_id=fixture_id,
+                mapping_version=row["mapping_version"],
+                structure_type=row["structure_type"],
+                ticker_home_win=row["ticker_home_win"],
+                ticker_draw=None,  # No draw in basketball
+                ticker_away_win=row["ticker_away_win"],
+                event_ticker=row["event_ticker"],
+                confidence_score=row["confidence_score"],
+            )
+            
+            kickoff = (
+                datetime.fromisoformat(row["date_utc"])
+                if row["date_utc"]
+                else now
+            )
+            
+            fixture_ctx = FixtureContext(
+                fixture_id=fixture_id,
+                home_team=row["home_team_name"] or str(row["home_team_id"]),
+                away_team=row["away_team_name"] or str(row["away_team_id"]),
+                kickoff_time=kickoff,
+                league="NBA",
+                mapping=mapping,
+                current_exposure=self.simulator.get_fixture_exposure(fixture_id),
+            )
+            fixtures.append(fixture_ctx)
+        
         return fixtures
 
     async def _process_fixture(
@@ -511,7 +591,20 @@ class TradingAgent:
         models from the modeling module.
         """
         # TODO: Integrate with actual prediction models
-        # For now, use simple home advantage priors
+        
+        # Check if NBA (2-way market - no draw)
+        if fixture.league == "NBA":
+            # NBA home court advantage: ~55-60% home win rate historically
+            return ModelPrediction(
+                model_name="nba_home_advantage_prior",
+                model_version="1.0.0",
+                prob_home_win=0.58,
+                prob_draw=0.0,  # No draws in basketball
+                prob_away_win=0.42,
+                confidence=0.6,
+            )
+        
+        # Soccer: use simple home advantage priors
         # Home win: 45%, Draw: 25%, Away win: 30%
         return ModelPrediction(
             model_name="home_advantage_prior",
