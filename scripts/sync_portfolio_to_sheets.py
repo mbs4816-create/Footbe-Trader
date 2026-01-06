@@ -97,10 +97,12 @@ async def fetch_kalshi_data(config):
     result = {
         "balance": None,
         "positions": [],
-        "settled_positions": [],
+        "settled_trades": [],
+        "open_trades": [],
         "fills": [],
         "total_realized_pnl": 0.0,
         "total_unrealized_pnl": 0.0,
+        "starting_bankroll": 100.0,  # User's starting capital
     }
     
     async with KalshiClient(config.kalshi) as kalshi:
@@ -108,58 +110,126 @@ async def fetch_kalshi_data(config):
         print("Fetching account balance...")
         balance = await kalshi.get_balance()
         result["balance"] = balance
-        print(f"  Balance: ${balance.balance:.2f}")
-        print(f"  Portfolio Value: ${balance.portfolio_value:.2f}")
-        print(f"  Payout: ${balance.payout:.2f}")
         
-        # Get all positions
+        # Total portfolio = cash + positions value
+        total_portfolio = balance.balance + balance.portfolio_value
+        print(f"  Cash: ${balance.balance:.2f}")
+        print(f"  Positions Value: ${balance.portfolio_value:.2f}")
+        print(f"  Total Portfolio: ${total_portfolio:.2f}")
+        
+        # Get all positions from API
         print("\nFetching positions...")
         all_positions = []
         try:
             positions, cursor = await kalshi.get_positions()
             all_positions.extend(positions)
-            print(f"  Found {len(positions)} positions")
-            
             while cursor:
                 positions, cursor = await kalshi.get_positions(cursor=cursor)
                 all_positions.extend(positions)
+            print(f"  Found {len(all_positions)} positions")
         except Exception as e:
             print(f"  Warning: Could not fetch positions: {e}")
         
-        # Separate into active and settled based on position count
-        # Active: position != 0 (still holding contracts)
-        # Settled: position == 0 but has realized P&L or was traded
-        for pos in all_positions:
-            if pos.position != 0:
-                result["positions"].append(pos)
-            elif pos.realized_pnl != 0 or pos.total_cost > 0:
-                result["settled_positions"].append(pos)
-        
+        result["positions"] = [p for p in all_positions if p.position != 0]
         print(f"  Active positions: {len(result['positions'])}")
-        print(f"  Settled positions: {len(result['settled_positions'])}")
         
         # Get recent fills
-        print("\nFetching recent fills...")
+        print("\nFetching fills...")
         try:
             fills, cursor = await kalshi.get_fills()
             result["fills"].extend(fills)
-            print(f"  Found {len(fills)} fills")
-            
             while cursor:
                 fills, cursor = await kalshi.get_fills(cursor=cursor)
                 result["fills"].extend(fills)
+            print(f"  Found {len(result['fills'])} fills")
         except Exception as e:
             print(f"  Warning: Could not fetch fills: {e}")
         
-        # Calculate P&L
-        result["total_realized_pnl"] = sum(p.realized_pnl for p in result["positions"]) + \
-                                        sum(p.realized_pnl for p in result["settled_positions"])
-        result["total_unrealized_pnl"] = balance.portfolio_value - balance.balance
+        # Aggregate fills by ticker to calculate positions and costs
+        print("\nAnalyzing trades and checking market results...")
+        trade_summary = defaultdict(lambda: {
+            "qty": 0, "cost": 0.0, "side": None, "fills": []
+        })
         
-        print(f"\n--- P&L Summary ---")
-        print(f"  Realized P&L: ${result['total_realized_pnl']:.2f}")
-        print(f"  Unrealized P&L: ${result['total_unrealized_pnl']:.2f}")
-        print(f"  Total P&L: ${result['total_realized_pnl'] + result['total_unrealized_pnl']:.2f}")
+        for f in result["fills"]:
+            ticker = f.ticker
+            # Calculate net position: buy YES = +, sell YES = -, buy NO = -, sell NO = +
+            multiplier = 1 if f.side == "yes" else -1
+            if f.action == "sell":
+                multiplier *= -1
+            
+            qty = f.count * multiplier
+            # Cost: buy = +cost, sell = -cost (received premium)
+            cost = f.price * f.count * (1 if f.action == "buy" else -1)
+            
+            trade_summary[ticker]["qty"] += qty
+            trade_summary[ticker]["cost"] += cost
+            trade_summary[ticker]["side"] = f.side
+            trade_summary[ticker]["fills"].append(f)
+        
+        # Check market results and calculate P&L
+        total_realized = 0.0
+        total_unrealized_cost = 0.0
+        
+        for ticker, trade in trade_summary.items():
+            try:
+                market = await kalshi.get_market(ticker)
+                trade["status"] = market.status
+                trade["result"] = market.raw_data.get("result", "unknown")
+                trade["title"] = market.title
+                
+                if market.status == "finalized":
+                    # Calculate payout: if result matches our side, we win $1 per contract
+                    # YES contracts pay $1 if result=yes, NO contracts pay $1 if result=no
+                    our_side = trade["side"]
+                    won = (trade["result"] == "yes" and our_side == "yes") or \
+                          (trade["result"] == "no" and our_side == "no")
+                    
+                    # For YES bets: won = qty * $1 payout
+                    # For sell positions (negative cost), we keep the premium if we win
+                    if trade["qty"] > 0:
+                        # We bought contracts
+                        payout = trade["qty"] if won else 0
+                    else:
+                        # We sold contracts (received premium upfront)
+                        payout = 0 if won else abs(trade["qty"])  # If we sold and lost, we pay out
+                    
+                    # P&L = payout - cost
+                    pnl = payout - trade["cost"]
+                    trade["pnl"] = pnl
+                    trade["settled"] = True
+                    total_realized += pnl
+                    result["settled_trades"].append(trade)
+                else:
+                    # Still open
+                    trade["pnl"] = 0
+                    trade["settled"] = False
+                    total_unrealized_cost += trade["cost"]
+                    result["open_trades"].append(trade)
+                    
+            except Exception as e:
+                print(f"  Warning: Could not get market {ticker}: {e}")
+                trade["status"] = "unknown"
+                trade["result"] = "unknown"
+        
+        result["total_realized_pnl"] = total_realized
+        # Unrealized = current position value - cost basis
+        result["total_unrealized_pnl"] = balance.portfolio_value - total_unrealized_cost
+        
+        # Overall P&L from starting bankroll
+        total_pnl = total_portfolio - result["starting_bankroll"]
+        
+        print(f"\n{'='*50}")
+        print(f"PORTFOLIO SUMMARY")
+        print(f"{'='*50}")
+        print(f"  Starting Bankroll: ${result['starting_bankroll']:.2f}")
+        print(f"  Current Portfolio: ${total_portfolio:.2f}")
+        print(f"  Overall P&L: ${total_pnl:+.2f}")
+        print(f"")
+        print(f"  Realized P&L: ${result['total_realized_pnl']:+.2f}")
+        print(f"  Unrealized P&L: ${result['total_unrealized_pnl']:+.2f}")
+        print(f"  Settled Trades: {len(result['settled_trades'])}")
+        print(f"  Open Trades: {len(result['open_trades'])}")
     
     return result
 
@@ -171,63 +241,129 @@ def export_to_sheets(data):
     
     balance = data["balance"]
     all_positions = data["positions"]
-    settled_positions = data["settled_positions"]
+    settled_trades = data.get("settled_trades", [])
+    open_trades = data.get("open_trades", [])
     all_fills = data["fills"]
     total_realized_pnl = data["total_realized_pnl"]
     total_unrealized = data["total_unrealized_pnl"]
+    starting_bankroll = data.get("starting_bankroll", 100.0)
+    
+    # Calculate totals
+    total_portfolio = balance.balance + balance.portfolio_value
+    total_pnl = total_portfolio - starting_bankroll
     
     # Export Portfolio Summary FIRST
-    worksheet = client._get_or_create_worksheet("Portfolio Summary", rows=35, cols=5)
+    worksheet = client._get_or_create_worksheet("Portfolio Summary", rows=40, cols=5)
     summary_rows = [
         ["🏆 Kalshi Portfolio Summary"],
         [f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"],
         [""],
-        ["=== Account Balance ==="],
-        ["Cash Balance", f"${balance.balance:.2f}"],
-        ["Portfolio Value", f"${balance.portfolio_value:.2f}"],
-        ["Pending Payout", f"${balance.payout:.2f}"],
+        ["=== Account ==="],
+        ["Starting Bankroll", f"${starting_bankroll:.2f}"],
+        ["Current Portfolio", f"${total_portfolio:.2f}"],
+        ["Overall P&L", f"${total_pnl:+.2f}"],
+        [""],
+        ["=== Balance Breakdown ==="],
+        ["Cash", f"${balance.balance:.2f}"],
+        ["Open Positions Value", f"${balance.portfolio_value:.2f}"],
         [""],
         ["=== Performance ==="],
-        ["Realized P&L", f"${total_realized_pnl:.2f}"],
-        ["Unrealized P&L", f"${total_unrealized:.2f}"],
-        ["Total P&L", f"${total_realized_pnl + total_unrealized:.2f}"],
+        ["Realized P&L", f"${total_realized_pnl:+.2f}"],
+        ["Unrealized P&L", f"${total_unrealized:+.2f}"],
         [""],
         ["=== Activity ==="],
-        ["Active Positions", len([p for p in all_positions if p.position != 0])],
-        ["Settled Positions", len(settled_positions)],
+        ["Settled Trades", len(settled_trades)],
+        ["Open Trades", len(open_trades)],
         ["Total Fills", len(all_fills)],
-        ["Resting Orders", sum(p.resting_orders_count for p in all_positions)],
         [""],
         ["=== Breakdown by Sport ==="],
     ]
     
-    # Calculate P&L by sport
+    # Calculate P&L by sport from settled trades
     sport_pnl = {"NBA": 0.0, "EPL": 0.0, "La Liga": 0.0, "Bundesliga": 0.0, "Serie A": 0.0, "Other": 0.0}
-    all_pos = all_positions + settled_positions
-    for p in all_pos:
-        ticker = p.ticker.upper()
+    for trade in settled_trades:
+        ticker = trade.get("fills", [{}])[0].ticker if trade.get("fills") else ""
+        ticker = ticker.upper()
+        pnl = trade.get("pnl", 0)
         if "NBA" in ticker:
-            sport_pnl["NBA"] += p.realized_pnl
+            sport_pnl["NBA"] += pnl
         elif "EPL" in ticker:
-            sport_pnl["EPL"] += p.realized_pnl
+            sport_pnl["EPL"] += pnl
         elif "LALIGA" in ticker:
-            sport_pnl["La Liga"] += p.realized_pnl
+            sport_pnl["La Liga"] += pnl
         elif "BUNDESLIGA" in ticker:
-            sport_pnl["Bundesliga"] += p.realized_pnl
+            sport_pnl["Bundesliga"] += pnl
         elif "SERIEA" in ticker:
-            sport_pnl["Serie A"] += p.realized_pnl
+            sport_pnl["Serie A"] += pnl
         else:
-            sport_pnl["Other"] += p.realized_pnl
+            sport_pnl["Other"] += pnl
     
     for sport, pnl in sport_pnl.items():
-        summary_rows.append([sport, f"${pnl:.2f}"])
+        if pnl != 0:
+            summary_rows.append([sport, f"${pnl:+.2f}"])
     
     worksheet.clear()
     worksheet.update(summary_rows, "A1")
     worksheet.format("A1", {"textFormat": {"bold": True, "fontSize": 14}})
     print("  Exported Portfolio Summary")
     
-    # Export Active Positions
+    # Export Settled Trades with P&L
+    if settled_trades:
+        worksheet = client._get_or_create_worksheet("Settled Trades")
+        headers = ["Game", "Contracts", "Cost", "Result", "Payout", "P&L", "Outcome"]
+        rows = [headers]
+        for trade in settled_trades:
+            ticker = trade.get("fills", [{}])[0].ticker if trade.get("fills") else "Unknown"
+            qty = trade.get("qty", 0)
+            cost = trade.get("cost", 0)
+            result = trade.get("result", "unknown")
+            pnl = trade.get("pnl", 0)
+            payout = cost + pnl  # pnl = payout - cost, so payout = cost + pnl
+            outcome = "✓ WON" if pnl > 0 else ("✗ LOST" if pnl < 0 else "PUSH")
+            
+            rows.append([
+                parse_ticker_to_game_name(ticker),
+                qty,
+                f"${cost:.2f}",
+                result.upper(),
+                f"${payout:.2f}",
+                f"${pnl:+.2f}",
+                outcome,
+            ])
+        worksheet.clear()
+        worksheet.update(rows, "A1")
+        worksheet.format("A1:G1", {
+            "backgroundColor": {"red": 0.2, "green": 0.5, "blue": 0.3},
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+        })
+        print(f"  Exported {len(settled_trades)} settled trades")
+    
+    # Export Open Trades
+    if open_trades:
+        worksheet = client._get_or_create_worksheet("Open Trades")
+        headers = ["Game", "Contracts", "Cost", "Status"]
+        rows = [headers]
+        for trade in open_trades:
+            ticker = trade.get("fills", [{}])[0].ticker if trade.get("fills") else "Unknown"
+            qty = trade.get("qty", 0)
+            cost = trade.get("cost", 0)
+            status = trade.get("status", "unknown")
+            
+            rows.append([
+                parse_ticker_to_game_name(ticker),
+                qty,
+                f"${cost:.2f}",
+                status.upper(),
+            ])
+        worksheet.clear()
+        worksheet.update(rows, "A1")
+        worksheet.format("A1:D1", {
+            "backgroundColor": {"red": 0.7, "green": 0.5, "blue": 0.1},
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+        })
+        print(f"  Exported {len(open_trades)} open trades")
+    
+    # Export Active Positions (from API)
     active_positions = [p for p in all_positions if p.position != 0]
     if active_positions:
         worksheet = client._get_or_create_worksheet("Active Positions")
@@ -249,36 +385,6 @@ def export_to_sheets(data):
             "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
         })
         print(f"  Exported {len(active_positions)} active positions")
-    
-    # Export Settled Positions (with outcomes)
-    if settled_positions:
-        worksheet = client._get_or_create_worksheet("Settled Positions")
-        headers = ["Game", "Ticker", "Outcome", "Position", "Realized P&L", "Total Cost"]
-        rows = [headers]
-        for p in settled_positions:
-            # Determine outcome based on realized P&L
-            if p.realized_pnl > 0:
-                outcome = "WON ✓"
-            elif p.realized_pnl < 0:
-                outcome = "LOST ✗"
-            else:
-                outcome = "PUSH"
-            
-            rows.append([
-                parse_ticker_to_game_name(p.ticker),
-                p.ticker,
-                outcome,
-                p.position,
-                f"${p.realized_pnl:.2f}",
-                f"${p.total_cost:.2f}",
-            ])
-        worksheet.clear()
-        worksheet.update(rows, "A1")
-        worksheet.format("A1:F1", {
-            "backgroundColor": {"red": 0.5, "green": 0.5, "blue": 0.2},
-            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
-        })
-        print(f"  Exported {len(settled_positions)} settled positions")
     
     # Export Fills with game names
     if all_fills:
