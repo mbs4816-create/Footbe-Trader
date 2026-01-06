@@ -88,13 +88,17 @@ class MappingCandidate:
 @dataclass
 class FixtureMarketMapping:
     """A confirmed mapping between a fixture and Kalshi markets."""
-    
+
     fixture_id: int
     mapping_version: int = 1
-    
+
+    # Team IDs (for model predictions)
+    home_team_id: int = 0
+    away_team_id: int = 0
+
     # Market structure
     structure_type: str = "UNKNOWN"
-    
+
     # Tickers
     ticker_home_win: str | None = None
     ticker_draw: str | None = None
@@ -104,11 +108,11 @@ class FixtureMarketMapping:
     ticker_away_win_yes: str | None = None
     ticker_away_win_no: str | None = None
     event_ticker: str | None = None
-    
+
     # Confidence
     confidence_score: float = 0.0
     confidence_components: dict[str, float] = field(default_factory=dict)
-    
+
     # Status
     status: str = "AUTO"  # "AUTO", "MANUAL_OVERRIDE", "REJECTED"
     metadata: dict[str, Any] = field(default_factory=dict)

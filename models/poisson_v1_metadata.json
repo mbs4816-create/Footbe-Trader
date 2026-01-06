@@ -1,0 +1,10 @@
+{
+  "name": "poisson",
+  "version": "1.0",
+  "trained_at": "2026-01-06T20:31:08.972408",
+  "training_samples": 2057,
+  "home_advantage": 1.209170485253643,
+  "league_avg_goals": 1.4035002430724355,
+  "rho": -0.029559965157180384,
+  "num_teams": 244
+}

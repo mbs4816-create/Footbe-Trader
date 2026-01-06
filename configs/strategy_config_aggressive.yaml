@@ -3,10 +3,12 @@
 # HIGH RISK - Uses leverage sizing and wider acceptance criteria
 
 # Edge thresholds (LOWERED for more volume)
+# NOTE: Using placeholder model (home advantage prior only), so edges are minimal
+# Real model integration needed for better edge detection
 edge:
-  min_edge_to_enter: 0.02  # 2% edge (vs 5% conservative)
-  exit_edge_buffer: -0.03  # Hold until -3% edge
-  min_model_confidence: 0.55  # Lower confidence threshold
+  min_edge_to_enter: 0.005  # 0.5% edge (VERY aggressive - placeholder model only)
+  exit_edge_buffer: -0.05  # Hold until -5% edge
+  min_model_confidence: 0.45  # Lower confidence threshold
 
 # Liquidity requirements (MORE RELAXED for more opportunities)
 liquidity:
@@ -22,9 +24,9 @@ kelly:
 # Position limits (HIGHER for more exposure)
 limits:
   max_position_per_market: 50  # Larger positions
-  max_exposure_per_fixture: 250.0  # $250 per fixture
-  max_global_exposure: 1000.0  # $1000 total exposure
-  initial_bankroll: 1000.0
+  max_exposure_per_fixture: 60.0  # $60 per fixture (adjusted for $127 bankroll)
+  max_global_exposure: 150.0  # $150 total exposure (adjusted for $127 bankroll)
+  initial_bankroll: 127.0  # Match actual starting bankroll
 
 # Exit rules (TIGHTER for quick profits)
 exit_rules:
@@ -40,12 +42,12 @@ market_filter:
   min_hours_to_close: 0.5  # Trade closer to games
   max_hours_to_close: 720.0
 
-# In-game trading (ENABLE for more opportunities)
+# In-game trading safeguards
 in_game:
-  require_pre_game: false  # Allow in-game trading
-  min_minutes_before_kickoff: 2  # Trade up to 2min before
+  require_pre_game: true  # ONLY pre-game trading (model not trained for in-game)
+  min_minutes_before_kickoff: 5  # Don't trade within 5min of kickoff
   max_price_deviation_to_enter: 0.35  # Accept larger deviations
-  stale_order_threshold: 0.10  # Cancel orders faster
+  stale_order_threshold: 0.15  # Cancel stale orders at 15% divergence
 
 # Paper trading
 paper_trading:

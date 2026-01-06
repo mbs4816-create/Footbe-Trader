@@ -4,11 +4,11 @@
 # Edge thresholds
 edge:
   # Minimum edge to consider entering a position (edge = model_prob - ask_price)
-  min_edge_to_enter: 0.05  # 5% edge
+  min_edge_to_enter: 0.03  # 3% edge (lowered for more aggressive trading)
   # Edge buffer for exit - exit when edge goes below this (negative = can tolerate small negative edge)
   exit_edge_buffer: -0.01  # Exit when edge < -1%
   # Minimum confidence from model to trade
-  min_model_confidence: 0.6
+  min_model_confidence: 0.55  # Lowered from 0.6 for more aggressive trading
 
 # Liquidity requirements
 liquidity:

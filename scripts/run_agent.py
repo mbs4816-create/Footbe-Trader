@@ -13,6 +13,7 @@ Usage:
 import argparse
 import asyncio
 import json
+import pickle
 import signal
 import sys
 from datetime import UTC, datetime, timedelta
@@ -28,6 +29,8 @@ from footbe_trader.common.time_utils import utc_now
 from footbe_trader.kalshi.client import KalshiClient
 from footbe_trader.kalshi.interfaces import MarketData, OrderbookData, OrderbookLevel, OrderData
 from footbe_trader.modeling.interfaces import PredictionResult
+from footbe_trader.modeling.features import MatchFeatureVector
+from footbe_trader.modeling.poisson_model import PoissonModel
 from footbe_trader.storage.database import Database
 from footbe_trader.strategy.decision_record import (
     AgentRunSummary,
@@ -98,6 +101,7 @@ class TradingAgent:
         use_bandit: bool = False,
         starting_bankroll: float = 1000.0,
         config: Any = None,
+        poisson_model: PoissonModel | None = None,
     ):
         """Initialize trading agent.
 
@@ -114,6 +118,7 @@ class TradingAgent:
             use_bandit: If True, use StrategyBandit for multi-strategy selection.
             starting_bankroll: Starting bankroll for performance tracking.
             config: Main config object for lifecycle manager.
+            poisson_model: Trained Poisson model for predictions (optional).
         """
         self.db = db
         self.kalshi_client = kalshi_client
@@ -125,6 +130,7 @@ class TradingAgent:
         self.live_game_provider = live_game_provider
         self.telegram = telegram_notifier
         self.narrative = narrative_generator or NarrativeGenerator()
+        self.poisson_model = poisson_model
 
         # Cache for live game states during a run
         self._live_game_states: dict[int, LiveGameState] = {}
@@ -486,6 +492,8 @@ class TradingAgent:
             mapping = FixtureMarketMapping(
                 fixture_id=row["fixture_id"],
                 mapping_version=row["mapping_version"],
+                home_team_id=row["home_team_id"],
+                away_team_id=row["away_team_id"],
                 structure_type=row["structure_type"],
                 ticker_home_win=row["ticker_home_win"],
                 ticker_draw=row["ticker_draw"],
@@ -783,8 +791,48 @@ class TradingAgent:
         This integrates with live game state to adjust pre-match predictions
         based on current score and time remaining.
         """
-        # Get base predictions (would integrate with actual models)
-        if fixture.league == "NBA":
+        # Get base predictions from Poisson model or fallback to priors
+        if self.poisson_model and self.poisson_model.is_trained and fixture.league != "NBA":
+            # Use trained Poisson model for soccer leagues
+            feature = MatchFeatureVector(
+                fixture_id=fixture.fixture_id,
+                kickoff_utc=fixture.kickoff_time,
+                home_team_id=fixture.mapping.home_team_id,
+                away_team_id=fixture.mapping.away_team_id,
+                season=2024,  # TODO: extract from fixture
+                round_str="",
+            )
+
+            try:
+                params = self.poisson_model.predict_params(feature)
+                base_home = params.prob_home
+                base_draw = params.prob_draw
+                base_away = params.prob_away
+                model_name = "poisson_v1"
+
+                logger.debug(
+                    "poisson_prediction",
+                    fixture_id=fixture.fixture_id,
+                    home=fixture.home_team,
+                    away=fixture.away_team,
+                    prob_home=base_home,
+                    prob_draw=base_draw,
+                    prob_away=base_away,
+                    lambda_home=params.lambda_home,
+                    lambda_away=params.lambda_away,
+                )
+            except Exception as e:
+                logger.warning(
+                    "poisson_prediction_failed",
+                    fixture_id=fixture.fixture_id,
+                    error=str(e),
+                )
+                # Fallback to prior
+                base_home = 0.45
+                base_draw = 0.25
+                base_away = 0.30
+                model_name = "home_advantage_prior"
+        elif fixture.league == "NBA":
             base_home = 0.58
             base_draw = 0.0  # No draws in basketball
             base_away = 0.42
@@ -1288,7 +1336,7 @@ class TradingAgent:
                 if decision.order_params
                 else None,
                 decision.rationale,
-                json.dumps(decision.filters_passed),
+                json.dumps({k: bool(v) for k, v in decision.filters_passed.items()}) if decision.filters_passed else None,
                 decision.rejection_reason,
                 1 if decision.order_placed else 0,
                 decision.order_id,
@@ -1657,6 +1705,24 @@ async def main() -> int:
             nba_client=nba_client,
         )
 
+    # Load Poisson model
+    poisson_model: PoissonModel | None = None
+    model_path = Path("models/poisson_v1.pkl")
+    if model_path.exists():
+        try:
+            with open(model_path, "rb") as f:
+                poisson_model = pickle.load(f)
+            logger.info(
+                "poisson_model_loaded",
+                path=str(model_path),
+                teams=len(poisson_model.team_ratings),
+                home_advantage=poisson_model.home_advantage,
+            )
+        except Exception as e:
+            logger.warning("poisson_model_load_failed", error=str(e))
+    else:
+        logger.warning("poisson_model_not_found", path=str(model_path))
+
     # Initialize strategy and simulator
     strategy = EdgeStrategy(strategy_config)
     simulator = PaperTradingSimulator(
@@ -1681,6 +1747,7 @@ async def main() -> int:
         use_bandit=True,  # Enable multi-strategy bandit
         starting_bankroll=strategy_config.initial_bankroll,
         config=config,  # For model lifecycle manager
+        poisson_model=poisson_model,  # Trained prediction model
     )
 
     try:
