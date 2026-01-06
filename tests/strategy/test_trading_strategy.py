@@ -347,18 +347,19 @@ class TestEdgeStrategy:
 
     def test_position_cap_per_market(self, strategy, fixture_context):
         """Should cap position at max per market."""
-        # Very high edge to trigger large Kelly
+        # High edge to trigger large Kelly, but within price deviation threshold
         model_pred = ModelPrediction(
             model_name="test",
             model_version="1.0.0",
-            prob_home_win=0.90,  # Very confident
-            prob_draw=0.05,
-            prob_away_win=0.05,
+            prob_home_win=0.80,  # Very confident
+            prob_draw=0.10,
+            prob_away_win=0.10,
             confidence=0.9,
         )
         
-        # Low ask price = high potential profit = large Kelly
-        orderbook = self._create_orderbook(best_bid=0.15, best_ask=0.20)
+        # Ask price within reasonable deviation of model prob (0.80 - 0.55 = 0.25 < 0.30)
+        # This gives edge of 0.25 (25%) which is still very high
+        orderbook = self._create_orderbook(best_bid=0.50, best_ask=0.55)
         market = self._create_market_data(status="open")
         
         outcome = OutcomeContext(
@@ -681,3 +682,107 @@ class TestCreateAgentRunSummary:
         assert summary.status == "running"
         assert summary.config_hash != ""
         assert summary.config_summary != {}
+
+
+class TestStaleOrderDetector:
+    """Tests for StaleOrderDetector class."""
+    
+    @pytest.fixture
+    def config(self):
+        """Create config with stale order settings."""
+        return StrategyConfig(
+            stale_order_threshold=0.20,  # 20 cents
+            require_pre_game=True,
+            min_minutes_before_kickoff=5,
+        )
+    
+    @pytest.fixture
+    def detector(self, config):
+        """Create detector instance."""
+        from footbe_trader.strategy.trading_strategy import StaleOrderDetector
+        return StaleOrderDetector(config)
+    
+    def _create_order(
+        self,
+        order_id: str = "order-123",
+        ticker: str = "KXTEST",
+        side: str = "yes",
+        action: str = "buy",
+        price: float = 0.50,
+        status: str = "resting",
+    ):
+        """Create a test order."""
+        from footbe_trader.kalshi.interfaces import OrderData
+        return OrderData(
+            order_id=order_id,
+            ticker=ticker,
+            side=side,
+            action=action,
+            order_type="limit",
+            price=price,
+            quantity=10,
+            status=status,
+        )
+    
+    def test_non_resting_order_not_stale(self, detector):
+        """Non-resting orders should not be flagged as stale."""
+        order = self._create_order(status="executed")
+        result = detector.check_order(order, current_ask=0.80, current_bid=0.75)
+        assert result is None
+    
+    def test_sell_order_not_stale(self, detector):
+        """Sell orders (exits) should not be flagged as stale."""
+        order = self._create_order(action="sell")
+        result = detector.check_order(order, current_ask=0.80, current_bid=0.75)
+        assert result is None
+    
+    def test_order_with_small_divergence_not_stale(self, detector):
+        """Orders with small price divergence should not be flagged."""
+        # Limit at 0.50, current ask at 0.60 = 10 cent divergence (< 20 cent threshold)
+        order = self._create_order(price=0.50)
+        result = detector.check_order(order, current_ask=0.60, current_bid=0.55)
+        assert result is None
+    
+    def test_order_with_large_divergence_is_stale(self, detector):
+        """Orders with large price divergence should be flagged as stale."""
+        # Limit at 0.30, current ask at 0.65 = 35 cent divergence (> 20 cent threshold)
+        order = self._create_order(price=0.30)
+        result = detector.check_order(order, current_ask=0.65, current_bid=0.60)
+        
+        assert result is not None
+        assert result.order_id == "order-123"
+        assert result.limit_price == 0.30
+        assert result.current_market_price == 0.65
+        assert result.price_divergence == pytest.approx(0.35)  # 65 - 30 = 35 cents
+        assert "Market moved" in result.reason
+    
+    def test_order_after_kickoff_is_stale(self, detector):
+        """Orders after game kickoff should be flagged as stale."""
+        order = self._create_order(price=0.50)
+        # Game kicked off 10 minutes ago
+        kickoff_time = datetime.now(UTC) - timedelta(minutes=10)
+        
+        result = detector.check_order(
+            order,
+            current_ask=0.50,  # No price divergence
+            current_bid=0.45,
+            kickoff_time=kickoff_time,
+        )
+        
+        assert result is not None
+        assert "Game has started" in result.reason
+    
+    def test_order_before_kickoff_not_stale_for_timing(self, detector):
+        """Orders before kickoff should not be flagged for timing."""
+        order = self._create_order(price=0.50)
+        # Game kicks off in 2 hours
+        kickoff_time = datetime.now(UTC) + timedelta(hours=2)
+        
+        result = detector.check_order(
+            order,
+            current_ask=0.50,  # No price divergence
+            current_bid=0.45,
+            kickoff_time=kickoff_time,
+        )
+        
+        assert result is None

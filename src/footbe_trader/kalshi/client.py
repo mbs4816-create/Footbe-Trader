@@ -112,10 +112,16 @@ class KalshiClient(IKalshiTradingClient):
         """
         # Build full path for signing
         full_path = f"/trade-api/v2{path}"
+        request_path = path  # Path to use in actual HTTP request
+        
         if params:
-            query_string = urlencode({k: v for k, v in params.items() if v is not None})
-            if query_string:
+            # Sort params for consistent ordering, filter None values
+            sorted_params = sorted((k, v) for k, v in params.items() if v is not None)
+            if sorted_params:
+                query_string = urlencode(sorted_params)
                 full_path = f"{full_path}?{query_string}"
+                # Use the path with query string directly to ensure signature matches
+                request_path = f"{path}?{query_string}"
 
         last_error: Exception | None = None
 

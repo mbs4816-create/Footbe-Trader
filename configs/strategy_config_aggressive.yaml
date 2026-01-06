@@ -1,0 +1,60 @@
+# Aggressive Strategy Configuration
+# Targets: 10-12% daily returns, 20% max drawdown
+# HIGH RISK - Uses leverage sizing and wider acceptance criteria
+
+# Edge thresholds (LOWERED for more volume)
+edge:
+  min_edge_to_enter: 0.02  # 2% edge (vs 5% conservative)
+  exit_edge_buffer: -0.03  # Hold until -3% edge
+  min_model_confidence: 0.55  # Lower confidence threshold
+
+# Liquidity requirements (MORE RELAXED for more opportunities)
+liquidity:
+  min_ask_volume: 5  # Accept thinner markets
+  min_bid_volume: 5
+  max_spread: 0.60  # 60 cents - accept wide spreads
+
+# Position sizing (AGGRESSIVE Kelly)
+kelly:
+  fraction: 0.50  # 50% Kelly (high risk)
+  max_kelly_fraction: 0.25  # Allow 25% of bankroll per trade
+
+# Position limits (HIGHER for more exposure)
+limits:
+  max_position_per_market: 50  # Larger positions
+  max_exposure_per_fixture: 250.0  # $250 per fixture
+  max_global_exposure: 1000.0  # $1000 total exposure
+  initial_bankroll: 1000.0
+
+# Exit rules (TIGHTER for quick profits)
+exit_rules:
+  take_profit: 0.08  # 8 cents profit (faster exits)
+  stop_loss: 0.15  # 15 cents loss (tighter stops)
+  close_before_expiry_hours: 0.5  # Close 30min before
+
+# Market filtering (MORE PERMISSIVE)
+market_filter:
+  allowed_statuses:
+    - "open"
+    - "active"
+  min_hours_to_close: 0.5  # Trade closer to games
+  max_hours_to_close: 720.0
+
+# In-game trading (ENABLE for more opportunities)
+in_game:
+  require_pre_game: false  # Allow in-game trading
+  min_minutes_before_kickoff: 2  # Trade up to 2min before
+  max_price_deviation_to_enter: 0.35  # Accept larger deviations
+  stale_order_threshold: 0.10  # Cancel orders faster
+
+# Paper trading
+paper_trading:
+  slippage_cents: 0.02
+  fill_probability: 0.7  # Lower fill rate for aggressive orders
+  partial_fill_range: [0.3, 0.8]
+
+# Logging
+logging:
+  log_all_decisions: true
+  include_orderbook_snapshot: true
+  include_features: true

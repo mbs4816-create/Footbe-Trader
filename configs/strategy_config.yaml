@@ -57,6 +57,23 @@ market_filter:
   # Maximum time until market close (hours)
   max_hours_to_close: 720.0  # 30 days
 
+# In-game trading safeguards
+# These settings prevent the agent from placing orders that would only fill
+# if the game situation changes (e.g., team falls behind), which makes
+# pre-match model predictions invalid
+in_game:
+  # Require game to not have started before placing new orders
+  require_pre_game: true
+  # Minimum minutes before kickoff to place orders
+  min_minutes_before_kickoff: 5
+  # Maximum deviation from model price to market price for entry
+  # If ask is < model_prob - this value, the market may have moved due to in-game action
+  # Example: Model says 45% (fair price 0.45), market ask is 0.22
+  # Deviation = 0.45 - 0.22 = 0.23 > 0.20 threshold = REJECT (suspicious price)
+  max_price_deviation_to_enter: 0.20  # 20 cents
+  # Cancel resting orders if market price diverges by this much from our limit
+  stale_order_threshold: 0.15  # 15 cents
+
 # Paper trading specific settings
 paper_trading:
   # Slippage simulation: add this to ask when buying, subtract from bid when selling

@@ -223,6 +223,9 @@ class DecisionRecord:
     order_id: str | None = None
     execution_error: str | None = None
 
+    # Strategy tracking (for multi-armed bandit)
+    strategy_name: str | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {

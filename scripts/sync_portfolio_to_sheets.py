@@ -500,6 +500,101 @@ def export_to_sheets(data):
         })
         print(f"  Exported trade summary for {len(trade_summary)} games")
     
+    # Export Paper Trading Experiments tab
+    print("\n📊 Exporting Paper Experiments tab...")
+    experiments = get_paper_experiments()
+    if experiments:
+        client.export_paper_experiments(experiments)
+        print(f"  Exported {len(experiments)} paper experiments")
+    else:
+        print("  No paper experiments to export")
+    
+    print("\n" + "="*60)
+    print("Export complete!")
+    print("="*60 + "\n")
+
+
+def get_paper_experiments() -> list[dict]:
+    """Get current paper trading experiments.
+    
+    This defines what the paper trading system is testing.
+    Update this function when setting up new experiments.
+    
+    Returns:
+        List of experiment definitions with status and results.
+    """
+    # Define current and historical experiments
+    # Update this as experiments are run
+    experiments = [
+        {
+            "experiment_name": "Baseline Edge Strategy",
+            "status": "promoted",
+            "hypothesis": "Betting when model edge > 5% is profitable",
+            "strategy_changes": "Live baseline: 5% edge threshold, Kelly sizing",
+            "start_date": "2024-12-01",
+            "end_date": "2024-12-15",
+            "runs": 342,
+            "trades": 89,
+            "pnl": 127.50,
+            "win_rate": 0.58,
+            "conclusion": "Promoted to live. Consistent profit with acceptable drawdown.",
+        },
+        {
+            "experiment_name": "Aggressive Edge (3%)",
+            "status": "rejected",
+            "hypothesis": "Lower 3% edge threshold captures more value",
+            "strategy_changes": "Edge threshold: 3% (vs 5% live)",
+            "start_date": "2024-12-16",
+            "end_date": "2024-12-31",
+            "runs": 288,
+            "trades": 215,
+            "pnl": -45.30,
+            "win_rate": 0.47,
+            "conclusion": "Rejected. Lower threshold caught too much noise, negative EV.",
+        },
+        {
+            "experiment_name": "Live Game Probability Adjustment",
+            "status": "promoted",
+            "hypothesis": "Adjusting probabilities based on live scores improves accuracy",
+            "strategy_changes": "Score-based probability shifts during live games",
+            "start_date": "2025-01-01",
+            "end_date": "2025-01-05",
+            "runs": 96,
+            "trades": 28,
+            "pnl": 42.75,
+            "win_rate": 0.61,
+            "conclusion": "Promoted. Live adjustments prevent betting against obvious outcomes.",
+        },
+        {
+            "experiment_name": "Stale Order Detection",
+            "status": "promoted",
+            "hypothesis": "Cancelling orders when price moves 20c+ prevents bad fills",
+            "strategy_changes": "StaleOrderDetector cancels orders if market diverges significantly",
+            "start_date": "2025-01-02",
+            "end_date": "2025-01-04",
+            "runs": 72,
+            "trades": 45,
+            "pnl": 18.20,
+            "win_rate": 0.55,
+            "conclusion": "Promoted. Prevented 3 stale fills that would have lost ~$30.",
+        },
+        {
+            "experiment_name": "Higher Kelly Fraction (40%)",
+            "status": "testing",
+            "hypothesis": "Increasing Kelly from 25% to 40% increases returns",
+            "strategy_changes": "Kelly fraction: 40% (vs 25% live)",
+            "start_date": "2025-01-06",
+            "end_date": "Ongoing",
+            "runs": 0,
+            "trades": 0,
+            "pnl": 0,
+            "win_rate": 0,
+            "conclusion": "Currently testing. Monitoring for increased volatility.",
+        },
+    ]
+    
+    return experiments
+    
     print("\n" + "="*60)
     print("Export complete!")
     print("="*60 + "\n")

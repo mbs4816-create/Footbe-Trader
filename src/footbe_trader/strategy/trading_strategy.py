@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 
 from footbe_trader.common.logging import get_logger
-from footbe_trader.kalshi.interfaces import MarketData, OrderbookData
+from footbe_trader.kalshi.interfaces import MarketData, OrderbookData, OrderData
 from footbe_trader.strategy.decision_record import (
     AgentRunSummary,
     DecisionAction,
@@ -74,6 +74,18 @@ class StrategyConfig:
     allowed_statuses: list[str] = field(default_factory=lambda: ["open"])
     min_hours_to_close: float = 2.0
     max_hours_to_close: float = 168.0
+    
+    # In-game trading safeguards
+    # Don't place new orders if game has started (kickoff has passed)
+    require_pre_game: bool = True
+    # Minimum minutes before kickoff to place orders
+    min_minutes_before_kickoff: int = 5
+    # Maximum allowed deviation from our model price to market price
+    # If market ask is > model_prob + max_price_deviation, skip (price too high)
+    # If market ask is < model_prob - max_price_deviation, flag as suspicious (in-game swing)
+    max_price_deviation_to_enter: float = 0.30  # 30 cents / 30%
+    # Cancel resting orders if price has moved this much from our limit
+    stale_order_threshold: float = 0.20  # 20 cents
 
     # Paper trading
     slippage_cents: float = 0.01
@@ -125,6 +137,17 @@ class StrategyConfig:
             min_hours_to_close=data.get("market_filter", {}).get("min_hours_to_close", 2.0),
             max_hours_to_close=data.get("market_filter", {}).get(
                 "max_hours_to_close", 168.0
+            ),
+            # In-game trading safeguards
+            require_pre_game=data.get("in_game", {}).get("require_pre_game", True),
+            min_minutes_before_kickoff=data.get("in_game", {}).get(
+                "min_minutes_before_kickoff", 5
+            ),
+            max_price_deviation_to_enter=data.get("in_game", {}).get(
+                "max_price_deviation_to_enter", 0.30
+            ),
+            stale_order_threshold=data.get("in_game", {}).get(
+                "stale_order_threshold", 0.20
             ),
             slippage_cents=data.get("paper_trading", {}).get("slippage_cents", 0.01),
             fill_probability=data.get("paper_trading", {}).get("fill_probability", 0.8),
@@ -549,6 +572,44 @@ class EdgeStrategy(IStrategy):
         filters["fixture_exposure"] = (
             fixture.current_exposure < self.config.max_exposure_per_fixture
         )
+        
+        # --- In-game trading safeguards ---
+        
+        # Pre-game requirement: game must not have started
+        if self.config.require_pre_game:
+            minutes_to_kickoff = (
+                fixture.kickoff_time - datetime.now(UTC)
+            ).total_seconds() / 60
+            filters["pre_game"] = minutes_to_kickoff >= self.config.min_minutes_before_kickoff
+        else:
+            filters["pre_game"] = True
+        
+        # Price deviation check: detect suspicious prices that suggest in-game movement
+        # If market ask is much lower than model probability, the game state may have changed
+        if outcome.orderbook and outcome.orderbook.best_yes_ask:
+            ask_price = outcome.orderbook.best_yes_ask
+            
+            # Get model probability for this outcome
+            if outcome.outcome == "home_win":
+                model_prob = model_prediction.prob_home_win
+            elif outcome.outcome == "draw":
+                model_prob = model_prediction.prob_draw
+            elif outcome.outcome == "away_win":
+                model_prob = model_prediction.prob_away_win
+            else:
+                model_prob = 0.0
+            
+            # Price deviation = how much cheaper the ask is than model expects
+            # Positive deviation = ask is lower than model (potential in-game move)
+            price_deviation = model_prob - ask_price
+            
+            # If ask is much lower than model, this could indicate:
+            # 1. The team is losing/behind in the game
+            # 2. News/injury that invalidates our model
+            # Either way, we should NOT buy at this "cheap" price
+            filters["price_deviation"] = price_deviation <= self.config.max_price_deviation_to_enter
+        else:
+            filters["price_deviation"] = True
 
         return filters
 
@@ -811,6 +872,113 @@ class EdgeStrategy(IStrategy):
             f"SL={entry_price - self.config.stop_loss:.2f}"
         )
         return decision
+
+
+@dataclass
+class StaleOrderInfo:
+    """Information about a stale resting order that should be cancelled."""
+    
+    order_id: str
+    ticker: str
+    side: str  # "yes" or "no"
+    action: str  # "buy" or "sell"
+    limit_price: float
+    current_market_price: float
+    price_divergence: float  # How far market has moved from our limit
+    reason: str  # Why this order is considered stale
+
+
+class StaleOrderDetector:
+    """Detects stale resting orders that should be cancelled.
+    
+    Orders become stale when the market price has moved significantly
+    away from our limit price. This typically indicates:
+    1. In-game price movement (team falling behind)
+    2. News/injury that invalidates our model
+    3. Market conditions have changed
+    
+    In these cases, holding onto the order means we'd only get filled
+    when conditions are bad for us.
+    """
+    
+    def __init__(self, config: StrategyConfig):
+        """Initialize detector.
+        
+        Args:
+            config: Strategy configuration with stale_order_threshold.
+        """
+        self.config = config
+    
+    def check_order(
+        self,
+        order: "OrderData",
+        current_ask: float,
+        current_bid: float,
+        kickoff_time: datetime | None = None,
+    ) -> StaleOrderInfo | None:
+        """Check if a resting order is stale and should be cancelled.
+        
+        Args:
+            order: The resting order to check.
+            current_ask: Current best ask price.
+            current_bid: Current best bid price.
+            kickoff_time: When the game starts (if known).
+            
+        Returns:
+            StaleOrderInfo if order should be cancelled, None otherwise.
+        """
+        # Only check resting buy orders (sell orders are exits, different logic)
+        if order.action != "buy" or order.status != "resting":
+            return None
+        
+        # For buy YES orders: our limit should be near current ask
+        # If current ask is much higher than our limit, market moved against us
+        if order.side == "yes":
+            current_market_price = current_ask
+            price_divergence = current_market_price - order.price
+        else:
+            # For buy NO orders: our limit should be near current NO ask
+            # NO ask = 1 - YES bid, so if YES bid dropped, NO ask increased
+            current_market_price = current_bid  # YES bid is relevant for NO trades
+            price_divergence = (1 - current_market_price) - order.price
+        
+        # Check if price has diverged beyond threshold
+        if price_divergence > self.config.stale_order_threshold:
+            reason = (
+                f"Market moved {price_divergence:.0%} away from limit. "
+                f"Limit: ${order.price:.2f}, Current market: ${current_market_price:.2f}"
+            )
+            return StaleOrderInfo(
+                order_id=order.order_id,
+                ticker=order.ticker,
+                side=order.side,
+                action=order.action,
+                limit_price=order.price,
+                current_market_price=current_market_price,
+                price_divergence=price_divergence,
+                reason=reason,
+            )
+        
+        # Check if game has started (if we have kickoff time)
+        if kickoff_time and self.config.require_pre_game:
+            now = datetime.now(UTC)
+            if now >= kickoff_time:
+                reason = (
+                    f"Game has started (kickoff: {kickoff_time.isoformat()}). "
+                    f"Pre-match orders are no longer valid."
+                )
+                return StaleOrderInfo(
+                    order_id=order.order_id,
+                    ticker=order.ticker,
+                    side=order.side,
+                    action=order.action,
+                    limit_price=order.price,
+                    current_market_price=current_market_price,
+                    price_divergence=price_divergence,
+                    reason=reason,
+                )
+        
+        return None
 
 
 def create_agent_run_summary(

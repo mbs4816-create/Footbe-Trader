@@ -89,6 +89,19 @@ class AgentConfig(BaseModel):
     dry_run: bool = True
 
 
+class TelegramConfig(BaseModel):
+    """Telegram notification configuration."""
+
+    bot_token: str = ""
+    chat_id: str = ""
+    enabled: bool = True
+
+    @property
+    def is_configured(self) -> bool:
+        """Check if Telegram is properly configured."""
+        return bool(self.bot_token and self.chat_id)
+
+
 class AppConfig(BaseModel):
     """Root application configuration."""
 
@@ -98,6 +111,7 @@ class AppConfig(BaseModel):
     kalshi: KalshiConfig = Field(default_factory=KalshiConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
 
 def load_config(config_path: str | Path) -> AppConfig:
@@ -169,3 +183,16 @@ def _apply_env_overrides(config: dict[str, Any]) -> None:
     # Football API from env
     if football_key := os.environ.get("FOOTBALL_API_KEY"):
         config["football_api"]["api_key"] = football_key
+
+    # Telegram configuration from env
+    if "telegram" not in config:
+        config["telegram"] = {}
+
+    if telegram_token := os.environ.get("TELEGRAM_BOT_TOKEN"):
+        config["telegram"]["bot_token"] = telegram_token
+
+    if telegram_chat_id := os.environ.get("TELEGRAM_CHAT_ID"):
+        config["telegram"]["chat_id"] = telegram_chat_id
+
+    if telegram_enabled := os.environ.get("TELEGRAM_ENABLED"):
+        config["telegram"]["enabled"] = telegram_enabled.lower() in ("true", "1", "yes")

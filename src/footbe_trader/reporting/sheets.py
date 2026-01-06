@@ -765,6 +765,110 @@ class GoogleSheetsClient:
         })
         
         logger.info("exported_narrative", sheet=sheet_name)
+    
+    def export_paper_experiments(
+        self,
+        experiments: list[dict[str, Any]],
+        sheet_name: str = "Paper Experiments",
+    ) -> int:
+        """Export paper trading experiments with explanations to a worksheet.
+        
+        This tab explains what the system is testing in paper mode, why it's
+        doing it, and what the results are. Paper trading is used to test
+        new strategies before risking real money.
+        
+        Args:
+            experiments: List of paper experiment dicts with:
+                - experiment_name: Name of the experiment
+                - hypothesis: What we're testing
+                - strategy_changes: Changes being tested vs live
+                - start_date: When experiment started
+                - end_date: When experiment ended (or "Ongoing")
+                - runs: Number of runs executed
+                - trades: Number of trades made
+                - pnl: Simulated P&L
+                - conclusion: What we learned
+                - status: "testing", "completed", "promoted", "rejected"
+            sheet_name: Name of the worksheet.
+            
+        Returns:
+            Number of rows written.
+        """
+        worksheet = self._get_or_create_worksheet(sheet_name, rows=100, cols=15)
+        
+        # Introduction section
+        intro_rows = [
+            ["📊 Paper Trading Experiments"],
+            [""],
+            ["Purpose: Paper trading runs simulated trades in the background to test"],
+            ["new strategies before deploying them to live trading with real money."],
+            [""],
+            ["This tab shows what experiments are running, what they're testing,"],
+            ["and whether the results suggest promoting the strategy to live."],
+            [""],
+            ["Paper trading does NOT send Telegram notifications (live only)."],
+            [""],
+        ]
+        
+        # Headers for experiments table
+        headers = [
+            "Experiment", "Status", "Hypothesis", "Strategy Changes",
+            "Start Date", "End Date", "Runs", "Trades", "Simulated P&L",
+            "Win Rate %", "Conclusion",
+        ]
+        
+        # Data rows
+        data_rows = [headers]
+        for exp in experiments:
+            data_rows.append([
+                exp.get("experiment_name", ""),
+                exp.get("status", ""),
+                exp.get("hypothesis", ""),
+                exp.get("strategy_changes", ""),
+                exp.get("start_date", ""),
+                exp.get("end_date", ""),
+                exp.get("runs", 0),
+                exp.get("trades", 0),
+                f"${exp.get('pnl', 0):.2f}",
+                f"{exp.get('win_rate', 0) * 100:.1f}%" if exp.get("win_rate") else "",
+                exp.get("conclusion", ""),
+            ])
+        
+        # Combine intro and data
+        all_rows = intro_rows + data_rows
+        
+        # Clear and update
+        worksheet.clear()
+        worksheet.update(all_rows, "A1")
+        
+        # Format title
+        worksheet.format("A1", {
+            "textFormat": {"bold": True, "fontSize": 16},
+        })
+        
+        # Format header row (after intro section)
+        header_row = len(intro_rows) + 1
+        worksheet.format(f"A{header_row}:K{header_row}", {
+            "backgroundColor": {"red": 0.6, "green": 0.2, "blue": 0.8},
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+        })
+        
+        # Color-code status column
+        for i, exp in enumerate(experiments):
+            row_num = len(intro_rows) + 2 + i
+            status = exp.get("status", "")
+            if status == "promoted":
+                color = {"red": 0.2, "green": 0.8, "blue": 0.2}  # Green
+            elif status == "rejected":
+                color = {"red": 0.8, "green": 0.2, "blue": 0.2}  # Red
+            elif status == "testing":
+                color = {"red": 0.9, "green": 0.7, "blue": 0.2}  # Yellow/orange
+            else:
+                color = {"red": 0.8, "green": 0.8, "blue": 0.8}  # Gray
+            worksheet.format(f"B{row_num}", {"backgroundColor": color})
+        
+        logger.info("exported_paper_experiments", count=len(experiments), sheet=sheet_name)
+        return len(experiments)
 
 
 def export_all_reports(

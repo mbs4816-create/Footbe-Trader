@@ -50,8 +50,22 @@ from footbe_trader.strategy.trading_strategy import (
     EdgeStrategy,
     FixtureContext,
     OutcomeContext,
+    StaleOrderDetector,
     StrategyConfig,
     create_agent_run_summary,
+)
+from footbe_trader.self_improvement.strategy_bandit import StrategyBandit
+from footbe_trader.self_improvement.model_lifecycle import ModelLifecycleManager
+from footbe_trader.execution.position_invalidator import PositionInvalidator
+from footbe_trader.reporting.daily_performance_tracker import DailyPerformanceTracker
+from footbe_trader.agent.live_game import (
+    GamePhase,
+    LiveGameState,
+    LiveGameStateProvider,
+)
+from footbe_trader.agent.telegram import (
+    NarrativeGenerator,
+    TelegramNotifier,
 )
 
 logger = get_logger(__name__)
@@ -78,16 +92,28 @@ class TradingAgent:
         simulator: PaperTradingSimulator,
         mode: str = "paper",
         dry_run: bool = False,
+        live_game_provider: LiveGameStateProvider | None = None,
+        telegram_notifier: TelegramNotifier | None = None,
+        narrative_generator: NarrativeGenerator | None = None,
+        use_bandit: bool = False,
+        starting_bankroll: float = 1000.0,
+        config: Any = None,
     ):
         """Initialize trading agent.
 
         Args:
             db: Database connection.
             kalshi_client: Kalshi API client (None for testing).
-            strategy: Trading strategy.
+            strategy: Trading strategy (used as fallback if bandit disabled).
             simulator: Paper trading simulator.
             mode: "paper" or "live".
             dry_run: If True, don't execute trades even in live mode.
+            live_game_provider: Provider for live game state (optional).
+            telegram_notifier: Telegram notification sender (optional).
+            narrative_generator: Generator for human-readable narratives (optional).
+            use_bandit: If True, use StrategyBandit for multi-strategy selection.
+            starting_bankroll: Starting bankroll for performance tracking.
+            config: Main config object for lifecycle manager.
         """
         self.db = db
         self.kalshi_client = kalshi_client
@@ -96,6 +122,25 @@ class TradingAgent:
         self.mode = mode
         self.dry_run = dry_run
         self._current_run: AgentRunSummary | None = None
+        self.live_game_provider = live_game_provider
+        self.telegram = telegram_notifier
+        self.narrative = narrative_generator or NarrativeGenerator()
+
+        # Cache for live game states during a run
+        self._live_game_states: dict[int, LiveGameState] = {}
+
+        # Self-improvement components
+        self.use_bandit = use_bandit
+        self.strategy_bandit = StrategyBandit(db) if use_bandit else None
+        self.position_invalidator = PositionInvalidator(
+            db=db,
+            kalshi_client=kalshi_client,
+            simulator=simulator,
+            live_game_provider=live_game_provider,
+            dry_run=dry_run,
+        ) if live_game_provider else None
+        self.performance_tracker = DailyPerformanceTracker(db, starting_bankroll)
+        self.model_lifecycle = ModelLifecycleManager(db, config) if config else None
 
     async def run_once(self) -> AgentRunSummary:
         """Run a single iteration of the trading loop.
@@ -124,6 +169,11 @@ class TradingAgent:
         )
 
         try:
+            # Clear live game state cache for fresh data
+            self._live_game_states.clear()
+            if self.live_game_provider:
+                self.live_game_provider.clear_cache()
+            
             # Step 1: Get mapped fixtures
             fixtures = await self._get_mapped_fixtures()
             run_summary.fixtures_evaluated = len(fixtures)
@@ -137,12 +187,21 @@ class TradingAgent:
 
                 await self._process_fixture(fixture_ctx, run_summary)
 
+            # Step 2.5: Cancel stale resting orders (in-game safeguard)
+            if not self.dry_run and self.kalshi_client is not None:
+                stale_cancelled = await self._cancel_stale_orders()
+                if stale_cancelled > 0:
+                    logger.info("stale_orders_cancelled", count=stale_cancelled)
+
             # Step 3: Check exit conditions for open positions
             await self._check_exits(run_summary)
 
             # Step 4: Take P&L snapshot
             pnl_snapshot = self.simulator.take_pnl_snapshot()
             self._store_pnl_snapshot(pnl_snapshot)
+
+            # Step 4.5: Update bandit with settled position outcomes
+            self._update_bandit_outcomes()
 
             # Step 5: Update summary
             self.simulator.update_run_summary(run_summary)
@@ -154,6 +213,22 @@ class TradingAgent:
 
             # Update run in database
             self._complete_agent_run(run_summary)
+
+            # Step 6: Track daily performance (self-improvement)
+            if self.performance_tracker:
+                report = self.performance_tracker.generate_daily_report()
+                pace_alert = self.performance_tracker.generate_pace_alert()
+
+                # Log performance tracking
+                logger.info(
+                    "daily_performance",
+                    current_bankroll=report["current_bankroll"],
+                    target_met=report["today"]["status"],
+                    completion_pct=f"{report['today']['completion_pct']:.1%}",
+                )
+
+                if pace_alert and self.telegram:
+                    await self.telegram.send_message(pace_alert)
 
             logger.info(
                 "agent_run_completed",
@@ -265,6 +340,15 @@ class TradingAgent:
             interval_minutes=interval_minutes,
         )
 
+        # Send startup notification (live mode only)
+        if self.telegram and self.mode == "live":
+            await self.telegram.send_message(
+                f"🚀 *Live Agent Started*\n"
+                f"Interval: {interval_minutes} minutes\n"
+                f"Dry Run: {self.dry_run}\n"
+                f"Trading real money on Kalshi"
+            )
+
         while not _shutdown_requested:
             try:
                 summary = await self.run_once()
@@ -283,8 +367,60 @@ class TradingAgent:
                 print(f"  Exposure: ${summary.total_exposure:.2f}")
                 print(f"{'=' * 60}\n")
 
+                # Send Telegram notification with narrative (live mode only)
+                if self.telegram and self.mode == "live":
+                    # Generate human-readable narrative
+                    narrative = self.narrative.generate_run_narrative(
+                        fixtures_evaluated=summary.fixtures_evaluated,
+                        markets_evaluated=summary.markets_evaluated,
+                        decisions_made=summary.decisions_made,
+                        orders_placed=summary.orders_placed,
+                        orders_filled=summary.orders_filled,
+                        skipped_reasons={},  # TODO: Track skip reasons
+                        trades_by_outcome={},  # TODO: Track trade outcomes
+                        live_games=[],  # TODO: Track live games
+                        cancelled_stale=0,  # TODO: Track cancelled orders
+                        edge_summary={},  # TODO: Track edge stats
+                    )
+                    
+                    # Get position narrative
+                    positions_data = [
+                        {
+                            "ticker": p.ticker,
+                            "unrealized_pnl": p.unrealized_pnl,
+                            "quantity": p.quantity,
+                        }
+                        for p in self.simulator.positions.values()
+                    ]
+                    position_narrative = self.narrative.generate_position_narrative(
+                        positions=positions_data,
+                        total_pnl=summary.total_unrealized_pnl,
+                    )
+                    
+                    full_narrative = f"{narrative}\n\n{position_narrative}"
+                    
+                    await self.telegram.send_run_summary(
+                        run_id=summary.run_id or 0,
+                        mode=self.mode,
+                        fixtures_evaluated=summary.fixtures_evaluated,
+                        markets_evaluated=summary.markets_evaluated,
+                        decisions_made=summary.decisions_made,
+                        orders_placed=summary.orders_placed,
+                        orders_filled=summary.orders_filled,
+                        realized_pnl=summary.total_realized_pnl,
+                        unrealized_pnl=summary.total_unrealized_pnl,
+                        total_exposure=summary.total_exposure,
+                        position_count=summary.position_count,
+                        narrative=full_narrative,
+                    )
+
             except Exception as e:
                 logger.error("run_loop_error", error=str(e), exc_info=True)
+                # Send error notification (live mode only - paper errors are silent)
+                if self.telegram and self.mode == "live":
+                    await self.telegram.send_error_alert(
+                        error_message=str(e),
+                    )
                 # Continue loop despite errors
 
             # Sleep until next iteration
@@ -292,6 +428,10 @@ class TradingAgent:
                 logger.info("sleeping", minutes=interval_minutes)
                 await asyncio.sleep(interval_minutes * 60)
 
+        # Send shutdown notification (live mode only)
+        if self.telegram and self.mode == "live":
+            await self.telegram.send_message("🛑 *Live Agent Stopped*")
+        
         logger.info("agent_loop_stopped")
 
     async def _get_mapped_fixtures(self) -> list[FixtureContext]:
@@ -457,6 +597,33 @@ class TradingAgent:
             fixture_id=fixture.fixture_id,
             match=f"{fixture.home_team} vs {fixture.away_team}",
         )
+        
+        # Check live game state for in-game awareness
+        live_state = await self._get_live_game_state(fixture)
+        
+        if live_state:
+            # Log current game state
+            if live_state.is_live:
+                score_str = "N/A"
+                if live_state.score:
+                    score_str = f"{live_state.score.home_score}-{live_state.score.away_score}"
+                logger.info(
+                    "fixture_is_live",
+                    fixture_id=fixture.fixture_id,
+                    phase=live_state.phase.value,
+                    score=score_str,
+                    home_adj=f"{live_state.home_win_adjustment:+.2%}",
+                    away_adj=f"{live_state.away_win_adjustment:+.2%}",
+                )
+            
+            # Skip if game is finished or not tradeable
+            if not live_state.is_tradeable:
+                logger.info(
+                    "skipping_untradeable_fixture",
+                    fixture_id=fixture.fixture_id,
+                    reason=live_state.stale_reason,
+                )
+                return
 
         # Build outcome contexts
         outcomes = await self._build_outcome_contexts(fixture)
@@ -469,14 +636,34 @@ class TradingAgent:
         # Get model predictions (placeholder - would integrate with actual model)
         model_prediction = await self._get_model_prediction(fixture)
 
-        # Evaluate fixture with strategy
-        decisions = self.strategy.evaluate_fixture(
-            fixture=fixture,
-            outcomes=outcomes,
-            model_prediction=model_prediction,
-            global_exposure=self.simulator.total_exposure,
-            bankroll=self.simulator.bankroll,
-        )
+        # Evaluate fixture with strategy (bandit or single strategy)
+        if self.use_bandit and self.strategy_bandit:
+            # Use multi-armed bandit to select best strategy
+            selected_strategy, strategy_name = self.strategy_bandit.select_strategy(fixture)
+            logger.info(
+                "strategy_selected",
+                fixture_id=fixture.fixture_id,
+                strategy=strategy_name,
+            )
+            decisions = selected_strategy.evaluate_fixture(
+                fixture=fixture,
+                outcomes=outcomes,
+                model_prediction=model_prediction,
+                global_exposure=self.simulator.total_exposure,
+                bankroll=self.simulator.bankroll,
+            )
+            # Store strategy name for later outcome tracking
+            for decision in decisions:
+                decision.strategy_name = strategy_name
+        else:
+            # Use single strategy
+            decisions = self.strategy.evaluate_fixture(
+                fixture=fixture,
+                outcomes=outcomes,
+                model_prediction=model_prediction,
+                global_exposure=self.simulator.total_exposure,
+                bankroll=self.simulator.bankroll,
+            )
 
         summary.decisions_made += len(decisions)
 
@@ -587,38 +774,147 @@ class TradingAgent:
     ) -> ModelPrediction:
         """Get model prediction for a fixture.
 
-        This is a placeholder that would integrate with the actual prediction
-        models from the modeling module.
+        This integrates with live game state to adjust pre-match predictions
+        based on current score and time remaining.
         """
-        # TODO: Integrate with actual prediction models
-        
-        # Check if NBA (2-way market - no draw)
+        # Get base predictions (would integrate with actual models)
         if fixture.league == "NBA":
-            # NBA home court advantage: ~55-60% home win rate historically
+            base_home = 0.58
+            base_draw = 0.0  # No draws in basketball
+            base_away = 0.42
+            model_name = "nba_home_advantage_prior"
+        else:
+            base_home = 0.45
+            base_draw = 0.25
+            base_away = 0.30
+            model_name = "home_advantage_prior"
+        
+        # Check for live game state adjustments
+        live_state = await self._get_live_game_state(fixture)
+        
+        if live_state and live_state.is_live:
+            # Apply live game adjustments to base probabilities
+            adj_home = base_home + live_state.home_win_adjustment
+            adj_draw = base_draw + live_state.draw_adjustment
+            adj_away = base_away + live_state.away_win_adjustment
+            
+            # Normalize to ensure probabilities sum to 1.0
+            total = adj_home + adj_draw + adj_away
+            if total > 0:
+                adj_home /= total
+                adj_draw /= total
+                adj_away /= total
+            
+            # Clamp to valid probability range
+            adj_home = max(0.01, min(0.99, adj_home))
+            adj_draw = max(0.0, min(0.99, adj_draw))
+            adj_away = max(0.01, min(0.99, adj_away))
+            
+            logger.info(
+                "live_adjusted_prediction",
+                fixture_id=fixture.fixture_id,
+                phase=live_state.phase.value,
+                score=f"{live_state.score.home_score}-{live_state.score.away_score}" if live_state.score else "N/A",
+                base_probs=f"H:{base_home:.2f} D:{base_draw:.2f} A:{base_away:.2f}",
+                adj_probs=f"H:{adj_home:.2f} D:{adj_draw:.2f} A:{adj_away:.2f}",
+            )
+            
             return ModelPrediction(
-                model_name="nba_home_advantage_prior",
+                model_name=f"{model_name}_live_adjusted",
                 model_version="1.0.0",
-                prob_home_win=0.58,
-                prob_draw=0.0,  # No draws in basketball
-                prob_away_win=0.42,
-                confidence=0.6,
+                prob_home_win=adj_home,
+                prob_draw=adj_draw,
+                prob_away_win=adj_away,
+                confidence=0.75,  # Higher confidence with live data
             )
         
-        # Soccer: use simple home advantage priors
-        # Home win: 45%, Draw: 25%, Away win: 30%
+        # Pre-match: return base predictions
         return ModelPrediction(
-            model_name="home_advantage_prior",
+            model_name=model_name,
             model_version="1.0.0",
-            prob_home_win=0.45,
-            prob_draw=0.25,
-            prob_away_win=0.30,
-            confidence=0.7,
+            prob_home_win=base_home,
+            prob_draw=base_draw,
+            prob_away_win=base_away,
+            confidence=0.6 if fixture.league == "NBA" else 0.7,
         )
+    
+    async def _get_live_game_state(
+        self,
+        fixture: FixtureContext,
+    ) -> LiveGameState | None:
+        """Get live game state for a fixture.
+        
+        Caches results during a run to reduce API calls.
+        """
+        # Check cache first
+        if fixture.fixture_id in self._live_game_states:
+            return self._live_game_states[fixture.fixture_id]
+        
+        if not self.live_game_provider:
+            return None
+        
+        try:
+            if fixture.league == "NBA":
+                # For NBA, we need the game_id which might be stored differently
+                # For now, use fixture_id as game_id (needs proper mapping)
+                state = await self.live_game_provider.get_nba_game_state(fixture.fixture_id)
+            else:
+                state = await self.live_game_provider.get_football_game_state(fixture.fixture_id)
+            
+            self._live_game_states[fixture.fixture_id] = state
+            return state
+            
+        except Exception as e:
+            logger.warning(
+                "live_game_state_fetch_failed",
+                fixture_id=fixture.fixture_id,
+                error=str(e),
+            )
+            return None
 
     async def _check_exits(self, summary: AgentRunSummary) -> None:
         """Check exit conditions for open positions."""
         open_positions = self.simulator.open_positions
 
+        # First, check for position invalidations (stale/adverse positions)
+        if self.position_invalidator:
+            invalidation_decisions = await self.position_invalidator.check_positions(open_positions)
+            for decision in invalidation_decisions:
+                summary.decisions_made += 1
+                self._store_decision_record(decision)
+
+                # Execute invalidation exit
+                if decision.order_params is not None:
+                    # Get orderbook for execution
+                    orderbook: OrderbookData | None = None
+                    if self.kalshi_client:
+                        try:
+                            orderbook = await self.kalshi_client.get_orderbook(decision.market_ticker)
+                        except Exception as e:
+                            logger.warning(
+                                "failed_to_fetch_orderbook_for_invalidation",
+                                ticker=decision.market_ticker,
+                                error=str(e),
+                            )
+
+                    if not self.dry_run and self.kalshi_client is not None:
+                        # Live trading
+                        order_data = await self._execute_live_order(decision, summary)
+                        if order_data:
+                            decision.order_placed = True
+                            decision.order_id = order_data.order_id
+                            self._update_decision_with_order(decision)
+                            self.simulator.execute_decision(decision, orderbook)
+                    else:
+                        # Paper trading
+                        order = self.simulator.execute_decision(decision, orderbook)
+                        if order:
+                            decision.order_placed = True
+                            decision.order_id = order.order_id
+                            self._update_decision_with_order(decision)
+                            self._store_paper_order(order)
+
+        # Then, check normal exit conditions
         for ticker, position in open_positions.items():
             if not position.is_open:
                 continue
@@ -754,6 +1050,112 @@ class TradingAgent:
             mapping=mapping,
         )
 
+    async def _cancel_stale_orders(self) -> int:
+        """Cancel stale resting orders where market has moved significantly.
+        
+        This is an in-game safeguard that cancels orders when:
+        1. The market price has diverged significantly from our limit price
+        2. The game has started (for pre-game only strategy)
+        
+        Returns:
+            Number of orders cancelled.
+        """
+        if not self.kalshi_client:
+            return 0
+        
+        detector = StaleOrderDetector(self.strategy.config)
+        cancelled = 0
+        
+        try:
+            # Get all resting orders from Kalshi
+            orders, _ = await self.kalshi_client.list_orders(status="resting")
+            
+            if not orders:
+                return 0
+            
+            logger.info("checking_stale_orders", count=len(orders))
+            
+            for order in orders:
+                try:
+                    # Get current orderbook for this market
+                    orderbook = await self.kalshi_client.get_orderbook(order.ticker)
+                    if not orderbook:
+                        continue
+                    
+                    # Get kickoff time for this fixture (if we can find it)
+                    kickoff_time = self._get_kickoff_for_ticker(order.ticker)
+                    
+                    # Check if order is stale
+                    stale_info = detector.check_order(
+                        order=order,
+                        current_ask=orderbook.best_yes_ask,
+                        current_bid=orderbook.best_yes_bid,
+                        kickoff_time=kickoff_time,
+                    )
+                    
+                    if stale_info:
+                        logger.warning(
+                            "cancelling_stale_order",
+                            order_id=order.order_id,
+                            ticker=order.ticker,
+                            limit_price=order.price,
+                            current_market=stale_info.current_market_price,
+                            divergence=stale_info.price_divergence,
+                            reason=stale_info.reason,
+                        )
+                        
+                        success = await self.kalshi_client.cancel_order(order.order_id)
+                        if success:
+                            cancelled += 1
+                            
+                            # Update local tracking in database
+                            self._mark_order_cancelled_in_db(order.order_id)
+                
+                except Exception as e:
+                    logger.warning(
+                        "stale_order_check_failed",
+                        order_id=order.order_id,
+                        error=str(e),
+                    )
+                    continue
+            
+            return cancelled
+            
+        except Exception as e:
+            logger.error("cancel_stale_orders_failed", error=str(e))
+            return 0
+    
+    def _get_kickoff_for_ticker(self, ticker: str) -> datetime | None:
+        """Get kickoff time for a market ticker from our mappings."""
+        cursor = self.db.connection.cursor()
+        cursor.execute(
+            """
+            SELECT f.kickoff_utc
+            FROM fixtures_v2 f
+            JOIN fixture_market_map m ON f.fixture_id = m.fixture_id
+            WHERE m.ticker_home_win = ? OR m.ticker_draw = ? OR m.ticker_away_win = ?
+            LIMIT 1
+            """,
+            (ticker, ticker, ticker),
+        )
+        row = cursor.fetchone()
+        if not row or not row["kickoff_utc"]:
+            return None
+        
+        return datetime.fromisoformat(row["kickoff_utc"])
+    
+    def _mark_order_cancelled_in_db(self, order_id: str) -> None:
+        """Mark an order as cancelled in our local database."""
+        cursor = self.db.connection.cursor()
+        cursor.execute(
+            """
+            UPDATE live_orders SET status = 'cancelled', cancelled_at = ?
+            WHERE order_id = ?
+            """,
+            (datetime.now(UTC).isoformat(), order_id),
+        )
+        self.db.connection.commit()
+
     # --- Database operations ---
 
     def _create_agent_run(self, summary: AgentRunSummary) -> int:
@@ -831,8 +1233,8 @@ class TradingAgent:
                 edge_calculation_json, kelly_sizing_json,
                 action, exit_reason, order_params_json,
                 rationale, filters_passed_json, rejection_reason,
-                order_placed, order_id, execution_error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                order_placed, order_id, execution_error, strategy_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 decision.decision_id,
@@ -867,6 +1269,7 @@ class TradingAgent:
                 1 if decision.order_placed else 0,
                 decision.order_id,
                 decision.execution_error,
+                decision.strategy_name,
             ),
         )
         self.db.connection.commit()
@@ -942,6 +1345,50 @@ class TradingAgent:
             ),
         )
         self.db.connection.commit()
+
+    def _update_bandit_outcomes(self) -> None:
+        """Update strategy bandit with outcomes from settled positions."""
+        if not self.use_bandit or not self.strategy_bandit:
+            return
+
+        # Get recently closed positions with strategy names
+        cursor = self.db.connection.cursor()
+        cursor.execute(
+            """
+            SELECT
+                pp.fixture_id,
+                pp.ticker,
+                pp.realized_pnl,
+                pp.average_entry_price,
+                pp.quantity,
+                dr.strategy_name
+            FROM paper_positions pp
+            JOIN decision_records dr ON pp.ticker = dr.market_ticker
+            WHERE pp.quantity = 0
+              AND pp.realized_pnl IS NOT NULL
+              AND dr.strategy_name IS NOT NULL
+              AND pp.updated_at > datetime('now', '-1 day')
+            """
+        )
+
+        settled_positions = cursor.fetchall()
+
+        for row in settled_positions:
+            fixture_id, ticker, realized_pnl, entry_price, quantity, strategy_name = row
+            if fixture_id and strategy_name and realized_pnl is not None:
+                exposure = abs(entry_price * quantity)
+                self.strategy_bandit.update_outcome(
+                    fixture_id=fixture_id,
+                    strategy_name=strategy_name,
+                    pnl=realized_pnl,
+                    exposure=exposure,
+                )
+                logger.debug(
+                    "bandit_outcome_updated",
+                    fixture_id=fixture_id,
+                    strategy=strategy_name,
+                    pnl=realized_pnl,
+                )
 
     def _store_pnl_snapshot(self, snapshot: PnlSnapshot) -> None:
         """Store P&L snapshot in database."""
@@ -1082,8 +1529,8 @@ def parse_args() -> argparse.Namespace:
         "--mode",
         type=str,
         choices=["paper", "live"],
-        default="paper",
-        help="Trading mode: paper (simulated) or live",
+        default="live",
+        help="Trading mode: paper (simulated) or live (default: live)",
     )
 
     parser.add_argument(
@@ -1155,6 +1602,37 @@ async def main() -> int:
     if config.kalshi.api_key_id and config.kalshi.private_key_path:
         kalshi_client = KalshiClient(config.kalshi)
 
+    # Initialize Telegram notifier (if configured)
+    telegram_notifier: TelegramNotifier | None = None
+    if config.telegram.is_configured and config.telegram.enabled:
+        telegram_notifier = TelegramNotifier(config.telegram)
+        logger.info("telegram_notifications_enabled")
+    elif config.telegram.enabled and not config.telegram.is_configured:
+        logger.warning("telegram_enabled_but_not_configured", 
+                      hint="Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+    
+    # Initialize narrative generator
+    narrative_generator = NarrativeGenerator()
+
+    # Initialize Football and NBA API clients for live game data
+    from footbe_trader.football.client import FootballApiClient
+    from footbe_trader.nba.client import NBAApiClient
+    
+    football_client: FootballApiClient | None = None
+    nba_client: NBAApiClient | None = None
+    
+    if hasattr(config, 'football_api') and config.football_api.api_key:
+        football_client = FootballApiClient(config.football_api)
+        nba_client = NBAApiClient(config.football_api)  # Same API key
+    
+    # Create live game provider
+    live_game_provider: LiveGameStateProvider | None = None
+    if football_client or nba_client:
+        live_game_provider = LiveGameStateProvider(
+            football_client=football_client,
+            nba_client=nba_client,
+        )
+
     # Initialize strategy and simulator
     strategy = EdgeStrategy(strategy_config)
     simulator = PaperTradingSimulator(
@@ -1173,19 +1651,132 @@ async def main() -> int:
         simulator=simulator,
         mode=args.mode,
         dry_run=args.dry_run,
+        live_game_provider=live_game_provider,
+        telegram_notifier=telegram_notifier,
+        narrative_generator=narrative_generator,
+        use_bandit=True,  # Enable multi-strategy bandit
+        starting_bankroll=strategy_config.initial_bankroll,
+        config=config,  # For model lifecycle manager
     )
 
     try:
-        if kalshi_client:
-            async with kalshi_client:
+        # Enter async context managers for all clients
+        async def run_with_clients():
+            """Run agent with proper client context management."""
+            # Stack of context managers to enter
+            contexts_to_enter = []
+            if kalshi_client:
+                contexts_to_enter.append(kalshi_client)
+            if football_client:
+                contexts_to_enter.append(football_client)
+            if nba_client:
+                contexts_to_enter.append(nba_client)
+            
+            # Simple context management without contextlib stack
+            try:
+                for ctx in contexts_to_enter:
+                    await ctx.__aenter__()
+                
                 if args.once:
-                    await agent.run_once()
+                    summary = await agent.run_once()
+                    # Send Telegram notification for single run (live mode only)
+                    if telegram_notifier and args.mode == "live":
+                        narrative = narrative_generator.generate_run_narrative(
+                            fixtures_evaluated=summary.fixtures_evaluated,
+                            markets_evaluated=summary.markets_evaluated,
+                            decisions_made=summary.decisions_made,
+                            orders_placed=summary.orders_placed,
+                            orders_filled=summary.orders_filled,
+                            skipped_reasons={},
+                            trades_by_outcome={},
+                            live_games=[],
+                            cancelled_stale=0,
+                            edge_summary={},
+                        )
+                        positions_data = [
+                            {
+                                "ticker": p.ticker,
+                                "unrealized_pnl": p.unrealized_pnl,
+                                "quantity": p.quantity,
+                            }
+                            for p in simulator.positions.values()
+                        ]
+                        position_narrative = narrative_generator.generate_position_narrative(
+                            positions=positions_data,
+                            total_pnl=summary.total_unrealized_pnl,
+                        )
+                        full_narrative = f"{narrative}\n\n{position_narrative}"
+                        await telegram_notifier.send_run_summary(
+                            run_id=summary.run_id or 0,
+                            mode=args.mode,
+                            fixtures_evaluated=summary.fixtures_evaluated,
+                            markets_evaluated=summary.markets_evaluated,
+                            decisions_made=summary.decisions_made,
+                            orders_placed=summary.orders_placed,
+                            orders_filled=summary.orders_filled,
+                            realized_pnl=summary.total_realized_pnl,
+                            unrealized_pnl=summary.total_unrealized_pnl,
+                            total_exposure=summary.total_exposure,
+                            position_count=summary.position_count,
+                            narrative=full_narrative,
+                        )
                 else:
                     await agent.run_loop(args.interval)
+            finally:
+                # Exit contexts in reverse order
+                for ctx in reversed(contexts_to_enter):
+                    try:
+                        await ctx.__aexit__(None, None, None)
+                    except Exception as e:
+                        logger.warning(f"Error closing context: {e}")
+        
+        if kalshi_client or football_client or nba_client:
+            await run_with_clients()
         else:
-            logger.warning("running_without_kalshi_client")
+            logger.warning("running_without_api_clients")
             if args.once:
-                await agent.run_once()
+                summary = await agent.run_once()
+                # Send Telegram notification for single run (live mode only)
+                if telegram_notifier and args.mode == "live":
+                    narrative = narrative_generator.generate_run_narrative(
+                        fixtures_evaluated=summary.fixtures_evaluated,
+                        markets_evaluated=summary.markets_evaluated,
+                        decisions_made=summary.decisions_made,
+                        orders_placed=summary.orders_placed,
+                        orders_filled=summary.orders_filled,
+                        skipped_reasons={},
+                        trades_by_outcome={},
+                        live_games=[],
+                        cancelled_stale=0,
+                        edge_summary={},
+                    )
+                    positions_data = [
+                        {
+                            "ticker": p.ticker,
+                            "unrealized_pnl": p.unrealized_pnl,
+                            "quantity": p.quantity,
+                        }
+                        for p in simulator.positions.values()
+                    ]
+                    position_narrative = narrative_generator.generate_position_narrative(
+                        positions=positions_data,
+                        total_pnl=summary.total_unrealized_pnl,
+                    )
+                    full_narrative = f"{narrative}\n\n{position_narrative}"
+                    await telegram_notifier.send_run_summary(
+                        run_id=summary.run_id or 0,
+                        mode=args.mode,
+                        fixtures_evaluated=summary.fixtures_evaluated,
+                        markets_evaluated=summary.markets_evaluated,
+                        decisions_made=summary.decisions_made,
+                        orders_placed=summary.orders_placed,
+                        orders_filled=summary.orders_filled,
+                        realized_pnl=summary.total_realized_pnl,
+                        unrealized_pnl=summary.total_unrealized_pnl,
+                        total_exposure=summary.total_exposure,
+                        position_count=summary.position_count,
+                        narrative=full_narrative,
+                    )
             else:
                 await agent.run_loop(args.interval)
 
