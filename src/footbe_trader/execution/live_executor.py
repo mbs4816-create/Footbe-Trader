@@ -371,6 +371,9 @@ class LiveExecutor(IExecutor):
             price = signal.entry_price
             quantity = min(signal.quantity, self.config.max_order_quantity)
 
+            # Get expiration timestamp from signal metadata (if provided)
+            expiration_ts = signal.metadata.get("expiration_ts")
+
             # Place order
             order = await self.kalshi_client.place_limit_order(
                 ticker=signal.market_id,
@@ -378,6 +381,7 @@ class LiveExecutor(IExecutor):
                 action=action,
                 price=price,
                 quantity=quantity,
+                expiration_ts=expiration_ts,
             )
 
             # Alert on success

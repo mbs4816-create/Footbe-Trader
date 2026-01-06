@@ -331,6 +331,7 @@ class IKalshiTradingClient(IKalshiClient):
         price: float,
         quantity: int,
         client_order_id: str | None = None,
+        expiration_ts: int | None = None,
     ) -> OrderData:
         """Place a limit order.
 
@@ -341,6 +342,7 @@ class IKalshiTradingClient(IKalshiClient):
             price: Limit price (0.01 to 0.99).
             quantity: Number of contracts.
             client_order_id: Optional client-specified order ID.
+            expiration_ts: Optional Unix timestamp in milliseconds when order expires.
 
         Returns:
             Order data with order_id and status.

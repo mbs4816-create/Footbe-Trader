@@ -3,7 +3,6 @@
 import asyncio
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
 
 import httpx
 
@@ -111,17 +110,12 @@ class KalshiClient(IKalshiTradingClient):
             KalshiApiError: If request fails after retries.
         """
         # Build full path for signing
+        # CRITICAL: Per Kalshi API docs, query parameters must be stripped from signature
+        # Signature is over: timestamp + method + path (WITHOUT query string)
         full_path = f"/trade-api/v2{path}"
-        request_path = path  # Path to use in actual HTTP request
-        
-        if params:
-            # Sort params for consistent ordering, filter None values
-            sorted_params = sorted((k, v) for k, v in params.items() if v is not None)
-            if sorted_params:
-                query_string = urlencode(sorted_params)
-                full_path = f"{full_path}?{query_string}"
-                # Use the path with query string directly to ensure signature matches
-                request_path = f"{path}?{query_string}"
+
+        # For actual request, httpx will add query params automatically
+        request_path = path
 
         last_error: Exception | None = None
 
@@ -134,15 +128,16 @@ class KalshiClient(IKalshiTradingClient):
             # Sign request
             signed = self.auth.sign_request(method, full_path)
 
-            # Log request
+            # Log request (use original path for logging)
             url = f"{self.config.effective_base_url}{path}"
             start_time = self.request_logger.log_request(method, url, params)
 
             try:
+                # Pass params dict to httpx - query string NOT included in signature
                 response = await self.client.request(
                     method=method,
-                    url=path,
-                    params=params,
+                    url=request_path,
+                    params=params,  # httpx will encode query params
                     json=json_body,
                     headers=signed.headers,
                 )
@@ -550,6 +545,7 @@ class KalshiClient(IKalshiTradingClient):
         price: float,
         quantity: int,
         client_order_id: str | None = None,
+        expiration_ts: int | None = None,
     ) -> OrderData:
         """Place a limit order.
 
@@ -560,6 +556,8 @@ class KalshiClient(IKalshiTradingClient):
             price: Limit price (0.01 to 0.99).
             quantity: Number of contracts.
             client_order_id: Optional client-specified order ID.
+            expiration_ts: Optional Unix timestamp in milliseconds when order expires.
+                          If not provided, order is Good-Til-Cancelled (GTC).
 
         Returns:
             Order data with order_id and status.
@@ -592,6 +590,9 @@ class KalshiClient(IKalshiTradingClient):
 
         if client_order_id:
             body["client_order_id"] = client_order_id
+
+        if expiration_ts:
+            body["expiration_ts"] = expiration_ts
 
         # Remove None values
         body = {k: v for k, v in body.items() if v is not None}

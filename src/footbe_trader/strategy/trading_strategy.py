@@ -265,6 +265,12 @@ class EdgeStrategy(IStrategy):
                 continue
 
             if edge >= self.config.min_edge_to_enter:
+                # Set order expiration to market expiration time (game kickoff)
+                metadata = {}
+                if context.market.expiration_time:
+                    expiration_ts = int(context.market.expiration_time.timestamp() * 1000)
+                    metadata["expiration_ts"] = expiration_ts
+
                 signals.append(
                     Signal(
                         market_id=context.market.ticker,
@@ -275,6 +281,7 @@ class EdgeStrategy(IStrategy):
                         edge=edge,
                         confidence=prediction.confidence,
                         reason=f"Edge {edge:.2%} above threshold",
+                        metadata=metadata,
                     )
                 )
 
