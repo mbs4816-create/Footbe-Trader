@@ -947,3 +947,151 @@ class ReportingQueries:
             position_count=row["position_count"] or 0,
             bankroll=row["bankroll"] or 0.0,
         )
+    
+    # =========================================================================
+    # Bulk export methods for Google Sheets integration
+    # =========================================================================
+    
+    def get_all_runs(self) -> list[RunSummary]:
+        """Get all runs from the database.
+        
+        Returns:
+            List of all RunSummary objects.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM agent_runs
+            ORDER BY started_at DESC
+            """
+        )
+        return [self._row_to_run_summary(row) for row in cursor.fetchall()]
+    
+    def get_all_decisions(self) -> list[DecisionSummary]:
+        """Get all decisions from the database.
+        
+        Returns:
+            List of all DecisionSummary objects.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM decision_records
+            ORDER BY timestamp DESC
+            """
+        )
+        return [self._row_to_decision_summary(row) for row in cursor.fetchall()]
+    
+    def get_all_pnl_snapshots(self) -> list[PnLSnapshot]:
+        """Get all P&L snapshots from the database.
+        
+        Returns:
+            List of all PnLSnapshot objects.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM pnl_snapshots
+            ORDER BY timestamp DESC
+            """
+        )
+        return [self._row_to_pnl_snapshot(row) for row in cursor.fetchall()]
+    
+    def get_all_daily_stats(self) -> list[DayStats]:
+        """Get aggregated daily statistics.
+        
+        Returns:
+            List of DayStats objects for each day.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT 
+                date(started_at) as day,
+                COUNT(*) as run_count,
+                SUM(decisions_made) as decisions_count,
+                SUM(orders_placed) as trades_count,
+                SUM(decisions_made - orders_placed) as skips_count,
+                SUM(total_realized_pnl + total_unrealized_pnl) as total_pnl
+            FROM agent_runs
+            GROUP BY date(started_at)
+            ORDER BY day DESC
+            """
+        )
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append(DayStats(
+                date=row["day"],
+                run_count=row["run_count"] or 0,
+                decisions_count=row["decisions_count"] or 0,
+                trades_count=row["trades_count"] or 0,
+                skips_count=row["skips_count"] or 0,
+                total_pnl=row["total_pnl"] or 0.0,
+            ))
+        return results
+    
+    def get_all_weekly_stats(self) -> list[WeekStats]:
+        """Get aggregated weekly statistics.
+        
+        Returns:
+            List of WeekStats objects for each week.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT 
+                date(started_at, 'weekday 0', '-6 days') as week_start,
+                date(started_at, 'weekday 0') as week_end,
+                COUNT(*) as run_count,
+                SUM(decisions_made) as decisions_count,
+                SUM(orders_placed) as trades_count,
+                SUM(decisions_made - orders_placed) as skips_count,
+                SUM(total_realized_pnl + total_unrealized_pnl) as total_pnl
+            FROM agent_runs
+            GROUP BY date(started_at, 'weekday 0', '-6 days')
+            ORDER BY week_start DESC
+            """
+        )
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append(WeekStats(
+                week_start=row["week_start"],
+                week_end=row["week_end"],
+                run_count=row["run_count"] or 0,
+                decisions_count=row["decisions_count"] or 0,
+                trades_count=row["trades_count"] or 0,
+                skips_count=row["skips_count"] or 0,
+                total_pnl=row["total_pnl"] or 0.0,
+            ))
+        return results
+    
+    def get_all_positions(self) -> list[dict]:
+        """Get all current positions.
+        
+        Returns:
+            List of position dicts.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM paper_positions
+            WHERE quantity > 0
+            ORDER BY ticker
+            """
+        )
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "ticker": row["ticker"],
+                "quantity": row["quantity"],
+                "average_entry_price": row["average_entry_price"],
+                "mark_price": row["mark_price"] or 0,
+                "unrealized_pnl": row["unrealized_pnl"] or 0,
+                "realized_pnl": row["realized_pnl"] or 0,
+                "updated_at": row["updated_at"] if "updated_at" in row.keys() else "",
+            })
+        return results
+

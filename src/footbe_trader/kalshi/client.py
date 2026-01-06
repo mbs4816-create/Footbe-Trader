@@ -401,18 +401,20 @@ class KalshiClient(IKalshiTradingClient):
 
     async def get_positions(
         self,
-        limit: int = 100,
+        limit: int | None = None,
         cursor: str | None = None,
         settlement_status: str | None = None,
     ) -> tuple[list[PositionData], str | None]:
         """Get current positions."""
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
         if cursor:
             params["cursor"] = cursor
         if settlement_status:
             params["settlement_status"] = settlement_status
 
-        data = await self._request("GET", "/portfolio/positions", params=params)
+        data = await self._request("GET", "/portfolio/positions", params=params if params else None)
         positions = [
             self._parse_position(p)
             for p in data.get("market_positions", [])
@@ -438,11 +440,13 @@ class KalshiClient(IKalshiTradingClient):
         ticker: str | None = None,
         min_ts: int | None = None,
         max_ts: int | None = None,
-        limit: int = 100,
+        limit: int | None = None,
         cursor: str | None = None,
     ) -> tuple[list[FillData], str | None]:
         """Get fills/trades."""
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
         if ticker:
             params["ticker"] = ticker
         if min_ts:
@@ -452,20 +456,30 @@ class KalshiClient(IKalshiTradingClient):
         if cursor:
             params["cursor"] = cursor
 
-        data = await self._request("GET", "/portfolio/fills", params=params)
+        data = await self._request("GET", "/portfolio/fills", params=params if params else None)
         fills = [self._parse_fill(f) for f in data.get("fills", [])]
         next_cursor = data.get("cursor")
         return fills, next_cursor
 
     def _parse_fill(self, data: dict[str, Any]) -> FillData:
         """Parse fill data from API response."""
+        # Note: price in fills is already in decimal format (e.g., 0.26), not cents
+        # Use yes_price/no_price for cents, but 'price' is already decimal
+        price = data.get("price", 0)
+        if isinstance(price, (int, float)) and price < 1:
+            # Already in decimal format
+            price_dollars = float(price)
+        else:
+            # Some older API responses might have cents
+            price_dollars = self._cents_to_dollars(price)
+        
         return FillData(
             trade_id=data.get("trade_id", ""),
             ticker=data.get("ticker", ""),
             order_id=data.get("order_id", ""),
             side=data.get("side", ""),
             action=data.get("action", ""),
-            price=self._cents_to_dollars(data.get("price", 0)),
+            price=price_dollars,
             count=data.get("count", 0),
             is_taker=data.get("is_taker", False),
             created_time=self._parse_datetime(data.get("created_time")),
