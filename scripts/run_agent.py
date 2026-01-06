@@ -204,7 +204,13 @@ class TradingAgent:
             self._update_bandit_outcomes()
 
             # Step 5: Update summary
-            self.simulator.update_run_summary(run_summary)
+            # In LIVE mode, fetch real portfolio data from Kalshi
+            # In PAPER mode, use simulator data
+            if self.mode == "live" and self.kalshi_client:
+                await self._update_summary_from_kalshi(run_summary)
+            else:
+                self.simulator.update_run_summary(run_summary)
+
             run_summary.status = "completed"
             run_summary.completed_at = utc_now()
 
@@ -1019,6 +1025,54 @@ class TradingAgent:
             league=str(row["league_id"]),
             mapping=mapping,
         )
+
+    async def _update_summary_from_kalshi(self, summary: AgentRunSummary) -> None:
+        """Update run summary with real Kalshi portfolio data (LIVE mode only).
+
+        Args:
+            summary: Run summary to update with live data.
+        """
+        if not self.kalshi_client:
+            return
+
+        try:
+            # Get real positions from Kalshi
+            positions, _ = await self.kalshi_client.get_positions(limit=200)
+
+            # Get resting orders count
+            orders, _ = await self.kalshi_client.list_orders(status="resting", limit=200)
+
+            # Calculate P&L from positions
+            total_realized = 0.0
+            total_unrealized = 0.0
+            total_exposure = 0.0
+
+            for pos in positions:
+                total_realized += pos.realized_pnl
+                total_unrealized += pos.market_exposure - pos.total_cost
+                total_exposure += abs(pos.market_exposure)
+
+            # Update summary with real data
+            summary.position_count = len(positions)
+            summary.total_realized_pnl = total_realized
+            summary.total_unrealized_pnl = total_unrealized
+            summary.total_exposure = total_exposure
+
+            # Note: orders_placed/filled are still from this run only (simulator tracking)
+            # We keep those as-is since they track activity during THIS run
+
+            logger.debug(
+                "kalshi_portfolio_fetched",
+                positions=len(positions),
+                resting_orders=len(orders),
+                realized_pnl=total_realized,
+                unrealized_pnl=total_unrealized,
+            )
+
+        except Exception as e:
+            logger.warning("failed_to_fetch_kalshi_portfolio", error=str(e))
+            # Fall back to simulator data if Kalshi fetch fails
+            self.simulator.update_run_summary(summary)
 
     async def _cancel_stale_orders(self) -> int:
         """Cancel stale resting orders where market has moved significantly.
