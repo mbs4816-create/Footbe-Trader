@@ -878,41 +878,11 @@ class TradingAgent:
 
         # First, check for position invalidations (stale/adverse positions)
         if self.position_invalidator:
-            invalidation_decisions = await self.position_invalidator.check_positions(open_positions)
-            for decision in invalidation_decisions:
-                summary.decisions_made += 1
-                self._store_decision_record(decision)
-
-                # Execute invalidation exit
-                if decision.order_params is not None:
-                    # Get orderbook for execution
-                    orderbook: OrderbookData | None = None
-                    if self.kalshi_client:
-                        try:
-                            orderbook = await self.kalshi_client.get_orderbook(decision.market_ticker)
-                        except Exception as e:
-                            logger.warning(
-                                "failed_to_fetch_orderbook_for_invalidation",
-                                ticker=decision.market_ticker,
-                                error=str(e),
-                            )
-
-                    if not self.dry_run and self.kalshi_client is not None:
-                        # Live trading
-                        order_data = await self._execute_live_order(decision, summary)
-                        if order_data:
-                            decision.order_placed = True
-                            decision.order_id = order_data.order_id
-                            self._update_decision_with_order(decision)
-                            self.simulator.execute_decision(decision, orderbook)
-                    else:
-                        # Paper trading
-                        order = self.simulator.execute_decision(decision, orderbook)
-                        if order:
-                            decision.order_placed = True
-                            decision.order_id = order.order_id
-                            self._update_decision_with_order(decision)
-                            self._store_paper_order(order)
+            invalidations = await self.position_invalidator.scan_and_invalidate_positions()
+            # Track invalidations count (position invalidator handles execution internally)
+            if invalidations:
+                summary.decisions_made += len(invalidations)
+                logger.info("positions_invalidated", count=len(invalidations))
 
         # Then, check normal exit conditions
         for ticker, position in open_positions.items():
