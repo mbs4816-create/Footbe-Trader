@@ -4,6 +4,24 @@
 This script fetches actual positions, fills, and P&L from Kalshi
 and exports them to Google Sheets with accurate performance data.
 
+IMPORTANT - How to interpret Kalshi positions:
+- Position > 0: User owns YES contracts (betting YES wins, e.g., Man Utd wins)
+- Position < 0: User is SHORT YES = LONG NO (betting NO wins, e.g., Man Utd doesn't win)
+
+The agent may enter positions by:
+1. Buying YES contracts directly (side=yes, action=buy)
+2. Selling YES contracts (side=yes, action=sell) - this creates a short YES position,
+   which is equivalent to being long NO contracts
+
+Example: Burnley vs Man United trade
+- Agent tried to buy YES at $0.24 (resting orders, not filled)
+- Agent later exited by selling YES at $0.39 (filled immediately)
+- Net position: -20 (short 20 YES = long 20 NO at $0.44 effective cost)
+- User is betting Man United does NOT win
+
+This script uses the positions API as the source of truth for direction,
+and fills API for cost calculation.
+
 Usage:
     python scripts/sync_portfolio_to_sheets.py
 """
@@ -145,27 +163,52 @@ async def fetch_kalshi_data(config):
         except Exception as e:
             print(f"  Warning: Could not fetch fills: {e}")
         
-        # Aggregate fills by ticker to calculate positions and costs
+        # Build a map of positions from the positions API (source of truth for direction)
+        # Position > 0: Long YES contracts (betting YES wins)  
+        # Position < 0: Short YES contracts = Long NO contracts (betting NO wins)
+        position_map = {}
+        for p in all_positions:
+            position_map[p.ticker] = p.position
+        
+        # Aggregate fills by ticker for cost calculation
+        # Use positions API as source of truth for direction
         print("\nAnalyzing trades and checking market results...")
         trade_summary = defaultdict(lambda: {
-            "qty": 0, "cost": 0.0, "side": None, "fills": []
+            "contracts": 0,
+            "cost": 0.0,
+            "position_type": None,  # "yes" or "no" - what we're betting on
+            "fills": [],
         })
         
         for f in result["fills"]:
             ticker = f.ticker
-            # Calculate net position: buy YES = +, sell YES = -, buy NO = -, sell NO = +
-            multiplier = 1 if f.side == "yes" else -1
-            if f.action == "sell":
-                multiplier *= -1
-            
-            qty = f.count * multiplier
-            # Cost: buy = +cost, sell = -cost (received premium)
-            cost = f.price * f.count * (1 if f.action == "buy" else -1)
-            
-            trade_summary[ticker]["qty"] += qty
-            trade_summary[ticker]["cost"] += cost
-            trade_summary[ticker]["side"] = f.side
+            # Use the actual_price property to get the correct price for the side
+            fill_cost = f.actual_price * f.count
+            trade_summary[ticker]["contracts"] += f.count
+            trade_summary[ticker]["cost"] += fill_cost
             trade_summary[ticker]["fills"].append(f)
+        
+        # Determine position type from positions API (or fills if position is 0/settled)
+        for ticker, trade in trade_summary.items():
+            position_qty = position_map.get(ticker, 0)
+            if position_qty > 0:
+                # Long YES
+                trade["position_type"] = "yes"
+            elif position_qty < 0:
+                # Short YES = Long NO
+                trade["position_type"] = "no"
+                trade["contracts"] = abs(position_qty)  # Use position qty, not fill count
+            else:
+                # Position is 0 (could be settled or never had position)
+                # Try to infer from fills
+                if trade["fills"]:
+                    f = trade["fills"][0]
+                    if (f.action == "buy" and f.side == "yes") or (f.action == "sell" and f.side == "no"):
+                        trade["position_type"] = "yes"
+                    else:
+                        trade["position_type"] = "no"
+                else:
+                    trade["position_type"] = "yes"  # Default
         
         # Check market results and calculate P&L
         total_realized = 0.0
@@ -178,34 +221,40 @@ async def fetch_kalshi_data(config):
                 trade["result"] = market.raw_data.get("result", "unknown")
                 trade["title"] = market.title
                 
+                position_type = trade["position_type"]  # "yes" or "no"
+                contracts = trade["contracts"]
+                cost = trade["cost"]
+                
                 if market.status == "finalized":
-                    # Calculate payout: if result matches our side, we win $1 per contract
-                    # YES contracts pay $1 if result=yes, NO contracts pay $1 if result=no
-                    our_side = trade["side"]
-                    won = (trade["result"] == "yes" and our_side == "yes") or \
-                          (trade["result"] == "no" and our_side == "no")
+                    # Calculate P&L based on whether we won
+                    # If we're long YES and result="yes" → won
+                    # If we're long NO and result="no" → won
+                    market_result = trade["result"]
+                    won = (market_result == position_type)
                     
-                    # For YES bets: won = qty * $1 payout
-                    # For sell positions (negative cost), we keep the premium if we win
-                    if trade["qty"] > 0:
-                        # We bought contracts
-                        payout = trade["qty"] if won else 0
-                    else:
-                        # We sold contracts (received premium upfront)
-                        payout = 0 if won else abs(trade["qty"])  # If we sold and lost, we pay out
+                    # Payout: $1 per contract if we won, $0 if we lost
+                    payout = contracts if won else 0
                     
                     # P&L = payout - cost
-                    pnl = payout - trade["cost"]
+                    pnl = payout - cost
                     trade["pnl"] = pnl
                     trade["settled"] = True
+                    trade["won"] = won
                     total_realized += pnl
+                    
+                    avg_price = cost / contracts if contracts > 0 else 0
+                    print(f"  {ticker}: BUY {position_type.upper()} x{contracts} @ ${avg_price:.2f} → "
+                          f"Result={market_result.upper()}, {'WON' if won else 'LOST'}, P&L: ${pnl:+.2f}")
+                    
                     result["settled_trades"].append(trade)
                 else:
                     # Still open
                     trade["pnl"] = 0
                     trade["settled"] = False
-                    total_unrealized_cost += trade["cost"]
+                    total_unrealized_cost += cost
                     result["open_trades"].append(trade)
+                    avg_price = cost / contracts if contracts > 0 else 0
+                    print(f"  {ticker}: BUY {position_type.upper()} x{contracts} @ ${avg_price:.2f} [OPEN]")
                     
             except Exception as e:
                 print(f"  Warning: Could not get market {ticker}: {e}")
@@ -310,11 +359,12 @@ def export_to_sheets(data):
     # Export Settled Trades with P&L
     if settled_trades:
         worksheet = client._get_or_create_worksheet("Settled Trades")
-        headers = ["Game", "Contracts", "Cost", "Result", "Payout", "P&L", "Outcome"]
+        headers = ["Game", "Position", "Contracts", "Cost", "Result", "Payout", "P&L", "Outcome"]
         rows = [headers]
         for trade in settled_trades:
             ticker = trade.get("fills", [{}])[0].ticker if trade.get("fills") else "Unknown"
-            qty = trade.get("qty", 0)
+            position_type = trade.get("position_type", "?")
+            contracts = trade.get("contracts", 0)
             cost = trade.get("cost", 0)
             result = trade.get("result", "unknown")
             pnl = trade.get("pnl", 0)
@@ -323,7 +373,8 @@ def export_to_sheets(data):
             
             rows.append([
                 parse_ticker_to_game_name(ticker),
-                qty,
+                f"BUY {position_type.upper()}",
+                contracts,
                 f"${cost:.2f}",
                 result.upper(),
                 f"${payout:.2f}",
@@ -332,7 +383,7 @@ def export_to_sheets(data):
             ])
         worksheet.clear()
         worksheet.update(rows, "A1")
-        worksheet.format("A1:G1", {
+        worksheet.format("A1:H1", {
             "backgroundColor": {"red": 0.2, "green": 0.5, "blue": 0.3},
             "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
         })
@@ -341,23 +392,25 @@ def export_to_sheets(data):
     # Export Open Trades
     if open_trades:
         worksheet = client._get_or_create_worksheet("Open Trades")
-        headers = ["Game", "Contracts", "Cost", "Status"]
+        headers = ["Game", "Position", "Contracts", "Cost", "Status"]
         rows = [headers]
         for trade in open_trades:
             ticker = trade.get("fills", [{}])[0].ticker if trade.get("fills") else "Unknown"
-            qty = trade.get("qty", 0)
+            position_type = trade.get("position_type", "?")
+            contracts = trade.get("contracts", 0)
             cost = trade.get("cost", 0)
             status = trade.get("status", "unknown")
             
             rows.append([
                 parse_ticker_to_game_name(ticker),
-                qty,
+                f"BUY {position_type.upper()}",
+                contracts,
                 f"${cost:.2f}",
                 status.upper(),
             ])
         worksheet.clear()
         worksheet.update(rows, "A1")
-        worksheet.format("A1:D1", {
+        worksheet.format("A1:E1", {
             "backgroundColor": {"red": 0.7, "green": 0.5, "blue": 0.1},
             "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
         })

@@ -462,16 +462,31 @@ class KalshiClient(IKalshiTradingClient):
         return fills, next_cursor
 
     def _parse_fill(self, data: dict[str, Any]) -> FillData:
-        """Parse fill data from API response."""
-        # Note: price in fills is already in decimal format (e.g., 0.26), not cents
-        # Use yes_price/no_price for cents, but 'price' is already decimal
-        price = data.get("price", 0)
-        if isinstance(price, (int, float)) and price < 1:
-            # Already in decimal format
-            price_dollars = float(price)
+        """Parse fill data from API response.
+        
+        Kalshi's fill API returns prices in two formats:
+        - 'price': decimal YES price (e.g., 0.56)
+        - 'yes_price'/'no_price': cents (e.g., 56, 44)
+        
+        The 'side' indicates which side was traded (yes/no).
+        The 'action' is always from the YES perspective:
+        - action=buy, side=yes → Bought YES
+        - action=sell, side=yes → Sold YES
+        - action=buy, side=no → Sold NO (same as bought YES)
+        - action=sell, side=no → Bought NO (same as sold YES)
+        """
+        # Parse prices - 'price' field is always the YES price in decimal
+        yes_price = data.get("price", 0)
+        if isinstance(yes_price, (int, float)) and yes_price < 1:
+            yes_price_dollars = float(yes_price)
         else:
-            # Some older API responses might have cents
-            price_dollars = self._cents_to_dollars(price)
+            yes_price_dollars = self._cents_to_dollars(yes_price)
+        
+        # Parse explicit yes_price and no_price (in cents)
+        yes_price_cents = data.get("yes_price", 0)
+        no_price_cents = data.get("no_price", 0)
+        yes_price_explicit = self._cents_to_dollars(yes_price_cents) if yes_price_cents else yes_price_dollars
+        no_price_explicit = self._cents_to_dollars(no_price_cents) if no_price_cents else (1.0 - yes_price_dollars)
         
         return FillData(
             trade_id=data.get("trade_id", ""),
@@ -479,7 +494,9 @@ class KalshiClient(IKalshiTradingClient):
             order_id=data.get("order_id", ""),
             side=data.get("side", ""),
             action=data.get("action", ""),
-            price=price_dollars,
+            price=yes_price_dollars,  # Keep for backward compatibility
+            yes_price=yes_price_explicit,
+            no_price=no_price_explicit,
             count=data.get("count", 0),
             is_taker=data.get("is_taker", False),
             created_time=self._parse_datetime(data.get("created_time")),

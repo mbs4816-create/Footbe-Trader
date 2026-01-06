@@ -147,18 +147,41 @@ class PositionData:
 
 @dataclass
 class FillData:
-    """Fill/execution data from Kalshi."""
+    """Fill/execution data from Kalshi.
+    
+    Note on Kalshi's API normalization:
+    - Kalshi stores all fills from the YES perspective
+    - 'price' is always the YES price in decimal form
+    - 'yes_price' and 'no_price' are in cents and complement each other
+    - When you "Buy NO at $0.44", the API returns:
+      - side="no", action="sell", price=0.56 (YES price!)
+      - yes_price=56 (cents), no_price=44 (cents)
+    """
 
     trade_id: str
     ticker: str
     order_id: str
-    side: str  # "yes" or "no"
-    action: str  # "buy" or "sell"
-    price: float
+    side: str  # "yes" or "no" - which side of the market
+    action: str  # "buy" or "sell" - from YES perspective
+    price: float  # Price in dollars (this is the YES price!)
     count: int  # Number of contracts
+    yes_price: float = 0.0  # YES price in dollars
+    no_price: float = 0.0  # NO price in dollars
     is_taker: bool = False
     created_time: datetime | None = None
     raw_data: dict[str, Any] = field(default_factory=dict)
+    
+    @property
+    def actual_price(self) -> float:
+        """Get the actual price paid/received based on side.
+        
+        Returns:
+            The price in dollars for the side (YES or NO) that was traded.
+        """
+        if self.side == "yes":
+            return self.yes_price if self.yes_price > 0 else self.price
+        else:
+            return self.no_price if self.no_price > 0 else (1.0 - self.price)
 
 
 class IKalshiClient(ABC):
