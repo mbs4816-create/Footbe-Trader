@@ -1528,6 +1528,11 @@ class TradingAgent:
         order_params = decision.order_params
         
         try:
+            # Get expiration timestamp from order params metadata
+            expiration_ts = None
+            if hasattr(order_params, 'metadata') and order_params.metadata:
+                expiration_ts = order_params.metadata.get('expiration_ts')
+
             logger.info(
                 "placing_live_order",
                 ticker=order_params.ticker,
@@ -1535,8 +1540,9 @@ class TradingAgent:
                 action=order_params.action,
                 price=order_params.price,
                 quantity=order_params.quantity,
+                expiration_ts=expiration_ts,
             )
-            
+
             order_data = await self.kalshi_client.place_limit_order(
                 ticker=order_params.ticker,
                 side=order_params.side,
@@ -1544,6 +1550,7 @@ class TradingAgent:
                 price=order_params.price,
                 quantity=order_params.quantity,
                 client_order_id=decision.decision_id,
+                expiration_ts=expiration_ts,
             )
             
             logger.info(

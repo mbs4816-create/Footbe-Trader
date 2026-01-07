@@ -146,6 +146,7 @@ class OrderParams:
     order_type: str  # "limit" or "market"
     price: float
     quantity: int
+    metadata: dict[str, Any] = field(default_factory=dict)  # Extra params like expiration_ts
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -156,6 +157,7 @@ class OrderParams:
             "order_type": self.order_type,
             "price": self.price,
             "quantity": self.quantity,
+            "metadata": self.metadata,
         }
 
 

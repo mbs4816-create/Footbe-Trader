@@ -497,6 +497,13 @@ class EdgeStrategy(IStrategy):
 
         # Build order
         decision.action = DecisionAction.BUY
+
+        # Set expiration to game kickoff time
+        metadata = {}
+        if fixture.kickoff_time:
+            expiration_ts = int(fixture.kickoff_time.timestamp())  # Unix timestamp in seconds
+            metadata["expiration_ts"] = expiration_ts
+
         decision.order_params = OrderParams(
             ticker=outcome.ticker,
             side="yes",
@@ -504,6 +511,7 @@ class EdgeStrategy(IStrategy):
             order_type="limit",
             price=ask_price,
             quantity=kelly_sizing.position_size,
+            metadata=metadata,
         )
         decision.rationale = (
             f"Buying {kelly_sizing.position_size} contracts of {outcome.outcome} "
@@ -775,6 +783,13 @@ class EdgeStrategy(IStrategy):
             decision.action = DecisionAction.EXIT
             decision.exit_reason = ExitReason.TAKE_PROFIT
             bid_price = outcome.orderbook.best_yes_bid if outcome.orderbook else mid_price
+
+            # Set expiration to game kickoff time
+            metadata = {}
+            if fixture.kickoff_time:
+                expiration_ts = int(fixture.kickoff_time.timestamp())
+                metadata["expiration_ts"] = expiration_ts
+
             decision.order_params = OrderParams(
                 ticker=outcome.ticker,
                 side="yes",
@@ -782,6 +797,7 @@ class EdgeStrategy(IStrategy):
                 order_type="limit",
                 price=bid_price or mid_price,
                 quantity=outcome.current_position,
+                metadata=metadata,
             )
             decision.rationale = (
                 f"Take profit triggered: mid={mid_price:.2f}, "
@@ -794,6 +810,13 @@ class EdgeStrategy(IStrategy):
             decision.action = DecisionAction.EXIT
             decision.exit_reason = ExitReason.STOP_LOSS
             bid_price = outcome.orderbook.best_yes_bid if outcome.orderbook else mid_price
+
+            # Set expiration to game kickoff time
+            metadata = {}
+            if fixture.kickoff_time:
+                expiration_ts = int(fixture.kickoff_time.timestamp())
+                metadata["expiration_ts"] = expiration_ts
+
             decision.order_params = OrderParams(
                 ticker=outcome.ticker,
                 side="yes",
@@ -801,6 +824,7 @@ class EdgeStrategy(IStrategy):
                 order_type="limit",
                 price=bid_price or mid_price,
                 quantity=outcome.current_position,
+                metadata=metadata,
             )
             decision.rationale = (
                 f"Stop loss triggered: mid={mid_price:.2f}, "
@@ -833,6 +857,13 @@ class EdgeStrategy(IStrategy):
             decision.action = DecisionAction.EXIT
             decision.exit_reason = ExitReason.EDGE_FLIP
             bid_price = outcome.orderbook.best_yes_bid if outcome.orderbook else mid_price
+
+            # Set expiration to game kickoff time
+            metadata = {}
+            if fixture.kickoff_time:
+                expiration_ts = int(fixture.kickoff_time.timestamp())
+                metadata["expiration_ts"] = expiration_ts
+
             decision.order_params = OrderParams(
                 ticker=outcome.ticker,
                 side="yes",
@@ -840,6 +871,7 @@ class EdgeStrategy(IStrategy):
                 order_type="limit",
                 price=bid_price or mid_price,
                 quantity=outcome.current_position,
+                metadata=metadata,
             )
             decision.rationale = (
                 f"Edge flip exit: current_edge={current_edge:.2%}, "
@@ -857,6 +889,13 @@ class EdgeStrategy(IStrategy):
                 decision.action = DecisionAction.EXIT
                 decision.exit_reason = ExitReason.MARKET_CLOSE
                 bid_price = outcome.orderbook.best_yes_bid if outcome.orderbook else mid_price
+
+                # Set expiration to game kickoff time
+                metadata = {}
+                if fixture.kickoff_time:
+                    expiration_ts = int(fixture.kickoff_time.timestamp())
+                    metadata["expiration_ts"] = expiration_ts
+
                 decision.order_params = OrderParams(
                     ticker=outcome.ticker,
                     side="yes",
@@ -864,6 +903,7 @@ class EdgeStrategy(IStrategy):
                     order_type="limit",
                     price=bid_price or mid_price,
                     quantity=outcome.current_position,
+                    metadata=metadata,
                 )
                 decision.rationale = (
                     f"Time-based exit: {hours_to_close:.1f}h to close, "
