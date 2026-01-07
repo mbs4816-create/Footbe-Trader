@@ -13,6 +13,7 @@ Usage:
 import argparse
 import asyncio
 import json
+import numpy as np
 import pickle
 import signal
 import sys
@@ -22,6 +23,21 @@ from typing import Any
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+
+def json_serialize(obj):
+    """Convert numpy types to Python types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: json_serialize(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [json_serialize(item) for item in obj]
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif isinstance(obj, (np.integer, int)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, float)):
+        return float(obj)
+    return obj
 
 from footbe_trader.common.config import load_config
 from footbe_trader.common.logging import get_logger
@@ -1324,7 +1340,7 @@ class TradingAgent:
                 json.dumps(decision.current_position.to_dict())
                 if decision.current_position
                 else None,
-                json.dumps(decision.edge_calculation.to_dict())
+                json.dumps(json_serialize(decision.edge_calculation.to_dict()))
                 if decision.edge_calculation
                 else None,
                 json.dumps(decision.kelly_sizing.to_dict())
@@ -1336,7 +1352,7 @@ class TradingAgent:
                 if decision.order_params
                 else None,
                 decision.rationale,
-                json.dumps({k: bool(v) for k, v in decision.filters_passed.items()}) if decision.filters_passed else None,
+                json.dumps(json_serialize(decision.filters_passed)) if decision.filters_passed else None,
                 decision.rejection_reason,
                 1 if decision.order_placed else 0,
                 decision.order_id,
@@ -1744,7 +1760,7 @@ async def main() -> int:
         live_game_provider=live_game_provider,
         telegram_notifier=telegram_notifier,
         narrative_generator=narrative_generator,
-        use_bandit=True,  # Enable multi-strategy bandit
+        use_bandit=False,  # Disable bandit - use config file strategy
         starting_bankroll=strategy_config.initial_bankroll,
         config=config,  # For model lifecycle manager
         poisson_model=poisson_model,  # Trained prediction model
