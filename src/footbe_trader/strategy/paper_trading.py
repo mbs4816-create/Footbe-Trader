@@ -113,6 +113,7 @@ class PaperPosition:
     mark_price: float = 0.0  # Last mark price
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    opened_at: datetime | None = None  # When position was first opened
 
     @property
     def total_pnl(self) -> float:
@@ -471,6 +472,7 @@ class PaperTradingSimulator:
                 ticker=ticker,
                 outcome=outcome,
                 fixture_id=fixture_id,
+                opened_at=utc_now(),  # Set when position is first created
             )
             self._positions[ticker] = position
 
@@ -480,6 +482,10 @@ class PaperTradingSimulator:
             new_cost = fill_price * fill_quantity + fees
             total_cost = old_cost + new_cost
             total_quantity = position.quantity + fill_quantity
+
+            # Set opened_at if this is the first fill
+            if position.quantity == 0 and total_quantity > 0 and position.opened_at is None:
+                position.opened_at = utc_now()
 
             if total_quantity > 0:
                 position.average_entry_price = total_cost / total_quantity
